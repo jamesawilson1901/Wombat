@@ -126,13 +126,21 @@ class SplitService : Service() {
 
             val splitter = FolderSplitter(this)
             val scanned = splitter.scan(source)
-            val plan = SplitPlanner.plan(scanned.map { it.entry }, job.limitBytes)
+            // Zip containers add per-entry overhead on top of the payload, so
+            // plan against a slightly smaller cap to keep finished zips under
+            // the user's limit.
+            val effectiveLimit =
+                if (job.zipParts) (job.limitBytes - ZIP_HEADROOM_BYTES).coerceAtLeast(1)
+                else job.limitBytes
+            val plan = SplitPlanner.plan(scanned.map { it.entry }, effectiveLimit)
 
             JobRepository.update(id) {
                 it.copy(status = SplitJob.Status.Running(0, plan.totalBytes))
             }
             var lastNotified = 0L
-            val result = splitter.execute(plan, scanned, destination, job.name) { copied, total ->
+            val result = splitter.execute(
+                plan, scanned, destination, job.name, job.zipParts,
+            ) { copied, total ->
                 JobRepository.update(id) {
                     it.copy(status = SplitJob.Status.Running(copied, total))
                 }
@@ -238,6 +246,7 @@ class SplitService : Service() {
         private const val EXTRA_JOB_ID = "job_id"
         private const val CHANNEL_ID = "split_jobs"
         private const val NOTIFICATION_ID = 1
+        private const val ZIP_HEADROOM_BYTES = 64L * 1024L
 
         fun start(context: Context, jobId: Long) {
             val intent = Intent(context, SplitService::class.java)

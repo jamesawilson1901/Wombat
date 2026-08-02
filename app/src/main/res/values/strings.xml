@@ -8,6 +8,7 @@
     <string name="pick_source">Choose folder to split</string>
     <string name="pick_destination">Choose destination folder</string>
     <string name="limit_label">Part size limit (MB)</string>
+    <string name="zip_label">Zip each part</string>
     <string name="start">Start</string>
     <string name="cancel">Cancel</string>
 

@@ -11,6 +11,7 @@ data class SplitJob(
     val sourceUri: String,
     val destinationUri: String,
     val limitBytes: Long,
+    val zipParts: Boolean,
     val status: Status,
 ) {
     sealed interface Status {
@@ -44,7 +45,12 @@ object JobRepository {
     private val lock = Any()
     private var nextId = 1L
 
-    fun create(sourceUri: String, destinationUri: String, limitBytes: Long): SplitJob {
+    fun create(
+        sourceUri: String,
+        destinationUri: String,
+        limitBytes: Long,
+        zipParts: Boolean,
+    ): SplitJob {
         synchronized(lock) {
             val job = SplitJob(
                 id = nextId++,
@@ -52,6 +58,7 @@ object JobRepository {
                 sourceUri = sourceUri,
                 destinationUri = destinationUri,
                 limitBytes = limitBytes,
+                zipParts = zipParts,
                 status = SplitJob.Status.Queued,
             )
             _jobs.update { it + job }

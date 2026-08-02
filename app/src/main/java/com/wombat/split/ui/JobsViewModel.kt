@@ -13,11 +13,17 @@ class JobsViewModel(application: Application) : AndroidViewModel(application) {
     val jobs: StateFlow<List<SplitJob>> = JobRepository.jobs
 
     /** Creates the job and hands it to the foreground service; returns its name. */
-    fun startJob(sourceTree: Uri, destinationTree: Uri, limitBytes: Long): String {
+    fun startJob(
+        sourceTree: Uri,
+        destinationTree: Uri,
+        limitBytes: Long,
+        zipParts: Boolean,
+    ): String {
         val job = JobRepository.create(
             sourceUri = sourceTree.toString(),
             destinationUri = destinationTree.toString(),
             limitBytes = limitBytes,
+            zipParts = zipParts,
         )
         SplitService.start(getApplication(), job.id)
         return job.name

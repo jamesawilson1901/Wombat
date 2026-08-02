@@ -4,6 +4,9 @@ import android.content.Context
 import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import java.io.BufferedOutputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 /**
  * Scans a source tree (Storage Access Framework) and copies files into
@@ -40,15 +43,17 @@ class FolderSplitter(private val context: Context) {
     }
 
     /**
-     * Copies the planned parts into [destination] as sibling folders named
-     * `<jobName>-01`, `<jobName>-02`, … preserving each file's relative path
-     * inside its part. Reports progress as bytes copied.
+     * Writes the planned parts into [destination]. With [zipParts] off each
+     * part is a folder `<jobName>-01`, `<jobName>-02`, … preserving relative
+     * paths; with it on each part becomes a single `<jobName>-01.zip` whose
+     * entries are the relative paths. Reports progress as bytes copied.
      */
     suspend fun execute(
         plan: SplitPlanner.SplitPlan,
         scanned: List<ScannedFile>,
         destination: DocumentFile,
         jobName: String,
+        zipParts: Boolean,
         onProgress: (bytesCopied: Long, bytesTotal: Long) -> Unit,
     ): Result {
         val byPath = scanned.associateBy { it.entry.relativePath }
@@ -58,17 +63,24 @@ class FolderSplitter(private val context: Context) {
 
         plan.parts.forEachIndexed { index, part ->
             val partName = "%s-%02d".format(jobName, index + 1)
-            val partDir = destination.createDirectory(partName)
-                ?: error("Could not create folder $partName")
-
-            for (file in part.files) {
-                currentCoroutineContext().ensureActive()
-                val source = byPath[file.relativePath]
-                    ?: error("Missing source for ${file.relativePath}")
-                copyInto(partDir, source, file.relativePath)
-                copied += file.size
-                fileCount++
-                onProgress(copied, totalBytes)
+            if (zipParts) {
+                writeZipPart(destination, partName, part, byPath) { fileSize ->
+                    copied += fileSize
+                    fileCount++
+                    onProgress(copied, totalBytes)
+                }
+            } else {
+                val partDir = destination.createDirectory(partName)
+                    ?: error("Could not create folder $partName")
+                for (file in part.files) {
+                    currentCoroutineContext().ensureActive()
+                    val source = byPath[file.relativePath]
+                        ?: error("Missing source for ${file.relativePath}")
+                    copyInto(partDir, source, file.relativePath)
+                    copied += file.size
+                    fileCount++
+                    onProgress(copied, totalBytes)
+                }
             }
         }
         return Result(
@@ -77,6 +89,34 @@ class FolderSplitter(private val context: Context) {
             totalBytes = totalBytes,
             oversizedCount = plan.oversizedCount,
         )
+    }
+
+    private suspend fun writeZipPart(
+        destination: DocumentFile,
+        partName: String,
+        part: SplitPlanner.SplitPart,
+        byPath: Map<String, ScannedFile>,
+        onFileDone: (fileSize: Long) -> Unit,
+    ) {
+        val target = destination.createFile("application/zip", "$partName.zip")
+            ?: error("Could not create $partName.zip")
+        val resolver = context.contentResolver
+        val out = resolver.openOutputStream(target.uri)
+            ?: error("Cannot write $partName.zip")
+        ZipOutputStream(BufferedOutputStream(out)).use { zip ->
+            for (file in part.files) {
+                currentCoroutineContext().ensureActive()
+                val source = byPath[file.relativePath]
+                    ?: error("Missing source for ${file.relativePath}")
+                zip.putNextEntry(ZipEntry(file.relativePath))
+                resolver.openInputStream(source.document.uri).use { input ->
+                    requireNotNull(input) { "Cannot read ${file.relativePath}" }
+                    input.copyTo(zip)
+                }
+                zip.closeEntry()
+                onFileDone(file.size)
+            }
+        }
     }
 
     private fun copyInto(partDir: DocumentFile, source: ScannedFile, relativePath: String) {

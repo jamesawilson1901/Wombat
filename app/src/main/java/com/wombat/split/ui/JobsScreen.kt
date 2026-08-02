@@ -27,6 +27,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -105,8 +106,8 @@ fun JobsScreen(viewModel: JobsViewModel = viewModel()) {
     if (showNewJob) {
         NewJobDialog(
             onDismiss = { showNewJob = false },
-            onStart = { source, destination, limitBytes ->
-                viewModel.startJob(source, destination, limitBytes)
+            onStart = { source, destination, limitBytes, zipParts ->
+                viewModel.startJob(source, destination, limitBytes, zipParts)
                 showNewJob = false
             },
         )
@@ -223,12 +224,13 @@ private fun JobCard(job: SplitJob, onCancel: () -> Unit) {
 @Composable
 private fun NewJobDialog(
     onDismiss: () -> Unit,
-    onStart: (source: Uri, destination: Uri, limitBytes: Long) -> Unit,
+    onStart: (source: Uri, destination: Uri, limitBytes: Long, zipParts: Boolean) -> Unit,
 ) {
     val context = LocalContext.current
     var sourceUri by remember { mutableStateOf<Uri?>(null) }
     var destinationUri by remember { mutableStateOf<Uri?>(null) }
     var limitText by remember { mutableStateOf("29") }
+    var zipParts by remember { mutableStateOf(true) }
 
     fun persist(uri: Uri) {
         context.contentResolver.takePersistableUriPermission(
@@ -280,12 +282,26 @@ private fun NewJobDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringResource(R.string.zip_label),
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Switch(checked = zipParts, onCheckedChange = { zipParts = it })
+                }
             }
         },
         confirmButton = {
             TextButton(
                 enabled = canStart,
-                onClick = { onStart(sourceUri!!, destinationUri!!, limitMb!! * MEGABYTE) },
+                onClick = {
+                    onStart(sourceUri!!, destinationUri!!, limitMb!! * MEGABYTE, zipParts)
+                },
             ) { Text(stringResource(R.string.start)) }
         },
         dismissButton = {
