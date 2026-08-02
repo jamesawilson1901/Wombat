@@ -1,7 +1,9 @@
 package com.wombat.split.ui
 
+import android.Manifest
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -29,6 +31,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,6 +45,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.wombat.split.R
+import com.wombat.split.jobs.SplitJob
 
 private const val MEGABYTE = 1024L * 1024L
 
@@ -50,6 +54,15 @@ private const val MEGABYTE = 1024L * 1024L
 fun JobsScreen(viewModel: JobsViewModel = viewModel()) {
     val jobs by viewModel.jobs.collectAsState()
     var showNewJob by remember { mutableStateOf(false) }
+
+    val notificationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* jobs run either way; the notification is just invisible if denied */ }
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= 33) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -83,7 +96,7 @@ fun JobsScreen(viewModel: JobsViewModel = viewModel()) {
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 items(jobs.asReversed(), key = { it.id }) { job ->
-                    JobCard(job)
+                    JobCard(job, onCancel = { viewModel.cancelJob(job.id) })
                 }
             }
         }
@@ -101,7 +114,7 @@ fun JobsScreen(viewModel: JobsViewModel = viewModel()) {
 }
 
 @Composable
-private fun JobCard(job: SplitJob) {
+private fun JobCard(job: SplitJob, onCancel: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
@@ -118,6 +131,20 @@ private fun JobCard(job: SplitJob) {
             }
             Spacer(Modifier.height(8.dp))
             when (val status = job.status) {
+                is SplitJob.Status.Queued -> {
+                    Text(
+                        stringResource(R.string.status_queued),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                is SplitJob.Status.Cancelled -> {
+                    Text(
+                        stringResource(R.string.status_cancelled),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 is SplitJob.Status.Scanning -> {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                     Spacer(Modifier.height(4.dp))
@@ -177,6 +204,16 @@ private fun JobCard(job: SplitJob) {
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error,
                     )
+                }
+            }
+            if (job.isActive) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    TextButton(onClick = onCancel) {
+                        Text(stringResource(R.string.cancel))
+                    }
                 }
             }
         }

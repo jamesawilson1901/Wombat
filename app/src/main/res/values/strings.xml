@@ -11,8 +11,20 @@
     <string name="start">Start</string>
     <string name="cancel">Cancel</string>
 
+    <string name="status_queued">Queued</string>
     <string name="status_scanning">Scanning folder…</string>
     <string name="status_running">%1$s of %2$s copied</string>
     <string name="status_done">%1$d parts · %2$d files · %3$s</string>
+    <string name="status_cancelled">Cancelled</string>
     <string name="warning_oversized">%1$d file(s) exceed the limit and got their own part</string>
+
+    <string name="notification_channel_name">Split jobs</string>
+    <string name="notif_running_title">Splitting %1$s…</string>
+    <string name="notif_done_title">%1$s finished</string>
+    <string name="notif_done_text">%1$d parts created</string>
+    <string name="notif_cancelled_title">%1$s cancelled</string>
+    <string name="notif_failed_title">%1$s failed</string>
+    <string name="error_source_inaccessible">Source folder is not accessible</string>
+    <string name="error_destination_inaccessible">Destination folder is not accessible</string>
+    <string name="error_generic">Split failed</string>
 </resources>
