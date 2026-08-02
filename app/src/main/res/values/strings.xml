@@ -1,6 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Wombat</string>
-    <string name="new_job">New job</string>
-    <string name="empty_state">No split jobs yet.</string>
+    <string name="new_job">New split</string>
+    <string name="empty_state">No split jobs yet.\nPick a big folder and a size limit to get started.</string>
+
+    <string name="new_job_title">New split job</string>
+    <string name="pick_source">Choose folder to split</string>
+    <string name="pick_destination">Choose destination folder</string>
+    <string name="limit_label">Part size limit (MB)</string>
+    <string name="start">Start</string>
+    <string name="cancel">Cancel</string>
+
+    <string name="status_scanning">Scanning folder…</string>
+    <string name="status_running">%1$s of %2$s copied</string>
+    <string name="status_done">%1$d parts · %2$d files · %3$s</string>
+    <string name="warning_oversized">%1$d file(s) exceed the limit and got their own part</string>
 </resources>

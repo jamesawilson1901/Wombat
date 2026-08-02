@@ -1,6 +1,25 @@
 # Wombat
 
-Android app for split jobs. Package: `com.wombat.split`.
+Android app that splits a large folder into part folders that each stay
+under a storage limit (e.g. 29 MB). Package: `com.wombat.split`.
+
+## How it works
+
+1. Pick a folder to split and a destination folder (Storage Access
+   Framework — no storage permission needed), set a part size limit in MB
+   (default 29).
+2. Wombat scans the folder, packs whole files into parts with
+   first-fit-decreasing bin packing (`split/SplitPlanner.kt` — pure logic,
+   unit-tested), keeping every part under the limit and preserving each
+   file's relative path.
+3. Parts are **copied** (the source is never modified) into sibling folders
+   named after the job: `echidna-01`, `echidna-02`, … Jobs auto-name from
+   the animal pool.
+4. Files bigger than the limit can't fit in any part; each gets its own
+   part and the job reports a warning.
+
+Current v1 limitations: jobs are in-memory only (no persistence across app
+restarts) and run while the app is in the foreground.
 
 ## Brand
 
