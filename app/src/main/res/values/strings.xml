@@ -5,7 +5,9 @@
     <string name="empty_state">No split jobs yet.\nPick a big folder and a size limit to get started.</string>
 
     <string name="new_job_title">New split job</string>
-    <string name="pick_source">Choose folder to split</string>
+    <string name="pick_source_folder">Split a folder</string>
+    <string name="pick_source_file">Split a file</string>
+    <string name="source_none">Nothing selected yet</string>
     <string name="pick_destination">Choose destination folder</string>
     <string name="limit_label">Part size limit (MB)</string>
     <string name="zip_label">Zip each part</string>
@@ -17,7 +19,7 @@
     <string name="status_running">%1$s of %2$s copied</string>
     <string name="status_done">%1$d parts · %2$d files · %3$s</string>
     <string name="status_cancelled">Cancelled</string>
-    <string name="warning_oversized">%1$d file(s) exceed the limit and got their own part</string>
+    <string name="chunked_note">%1$d large file(s) were byte-chunked into .001/.002 parts</string>
 
     <string name="notification_channel_name">Split jobs</string>
     <string name="notif_running_title">Splitting %1$s…</string>

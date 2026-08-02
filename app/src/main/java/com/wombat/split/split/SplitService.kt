@@ -119,13 +119,20 @@ class SplitService : Service() {
         notify(NOTIFICATION_ID, progressNotification(job.name, indeterminate = true, jobId = id))
 
         try {
-            val source = DocumentFile.fromTreeUri(this, job.sourceUri.toUri())
-                ?: error(getString(R.string.error_source_inaccessible))
             val destination = DocumentFile.fromTreeUri(this, job.destinationUri.toUri())
                 ?: error(getString(R.string.error_destination_inaccessible))
 
             val splitter = FolderSplitter(this)
-            val scanned = splitter.scan(source)
+            val scanned = if (job.sourceIsFile) {
+                val source = DocumentFile.fromSingleUri(this, job.sourceUri.toUri())
+                    ?.takeIf { it.isFile }
+                    ?: error(getString(R.string.error_source_inaccessible))
+                splitter.scanSingle(source)
+            } else {
+                val source = DocumentFile.fromTreeUri(this, job.sourceUri.toUri())
+                    ?: error(getString(R.string.error_source_inaccessible))
+                splitter.scan(source)
+            }
             // Zip containers add per-entry overhead on top of the payload, so
             // plan against a slightly smaller cap to keep finished zips under
             // the user's limit.
@@ -160,7 +167,7 @@ class SplitService : Service() {
                         partCount = result.partCount,
                         fileCount = result.fileCount,
                         totalBytes = result.totalBytes,
-                        oversizedCount = result.oversizedCount,
+                        chunkedFileCount = result.chunkedFileCount,
                     )
                 )
             }

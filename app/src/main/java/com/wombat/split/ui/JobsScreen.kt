@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
@@ -106,8 +107,8 @@ fun JobsScreen(viewModel: JobsViewModel = viewModel()) {
     if (showNewJob) {
         NewJobDialog(
             onDismiss = { showNewJob = false },
-            onStart = { source, destination, limitBytes, zipParts ->
-                viewModel.startJob(source, destination, limitBytes, zipParts)
+            onStart = { source, destination, limitBytes, zipParts, sourceIsFile ->
+                viewModel.startJob(source, destination, limitBytes, zipParts, sourceIsFile)
                 showNewJob = false
             },
         )
@@ -181,21 +182,18 @@ private fun JobCard(job: SplitJob, onCancel: () -> Unit) {
                     Text(
                         stringResource(
                             R.string.status_done,
-                            status.result.partCount,
-                            status.result.fileCount,
-                            formatBytes(status.result.totalBytes),
+                            status.partCount,
+                            status.fileCount,
+                            formatBytes(status.totalBytes),
                         ),
                         style = MaterialTheme.typography.bodyMedium,
                     )
-                    if (status.result.oversizedCount > 0) {
+                    if (status.chunkedFileCount > 0) {
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            stringResource(
-                                R.string.warning_oversized,
-                                status.result.oversizedCount,
-                            ),
+                            stringResource(R.string.chunked_note, status.chunkedFileCount),
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
@@ -224,27 +222,36 @@ private fun JobCard(job: SplitJob, onCancel: () -> Unit) {
 @Composable
 private fun NewJobDialog(
     onDismiss: () -> Unit,
-    onStart: (source: Uri, destination: Uri, limitBytes: Long, zipParts: Boolean) -> Unit,
+    onStart: (
+        source: Uri,
+        destination: Uri,
+        limitBytes: Long,
+        zipParts: Boolean,
+        sourceIsFile: Boolean,
+    ) -> Unit,
 ) {
     val context = LocalContext.current
     var sourceUri by remember { mutableStateOf<Uri?>(null) }
+    var sourceIsFile by remember { mutableStateOf(false) }
     var destinationUri by remember { mutableStateOf<Uri?>(null) }
     var limitText by remember { mutableStateOf("29") }
     var zipParts by remember { mutableStateOf(true) }
 
-    fun persist(uri: Uri) {
-        context.contentResolver.takePersistableUriPermission(
-            uri,
-            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-        )
+    fun persist(uri: Uri, write: Boolean) {
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+            (if (write) Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0)
+        context.contentResolver.takePersistableUriPermission(uri, flags)
     }
 
-    val pickSource = rememberLauncherForActivityResult(
+    val pickSourceFolder = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
-    ) { uri -> uri?.let { persist(it); sourceUri = it } }
+    ) { uri -> uri?.let { persist(it, write = true); sourceUri = it; sourceIsFile = false } }
+    val pickSourceFile = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> uri?.let { persist(it, write = false); sourceUri = it; sourceIsFile = true } }
     val pickDestination = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
-    ) { uri -> uri?.let { persist(it); destinationUri = it } }
+    ) { uri -> uri?.let { persist(it, write = true); destinationUri = it } }
 
     val limitMb = limitText.toLongOrNull()
     val canStart = sourceUri != null && destinationUri != null && limitMb != null && limitMb > 0
@@ -254,15 +261,24 @@ private fun NewJobDialog(
         title = { Text(stringResource(R.string.new_job_title)) },
         text = {
             Column {
-                OutlinedButton(
-                    onClick = { pickSource.launch(null) },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(
-                        sourceUri?.let { folderLabel(it) }
-                            ?: stringResource(R.string.pick_source)
-                    )
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        onClick = { pickSourceFolder.launch(null) },
+                        modifier = Modifier.weight(1f),
+                    ) { Text(stringResource(R.string.pick_source_folder)) }
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(
+                        onClick = { pickSourceFile.launch(arrayOf("*/*")) },
+                        modifier = Modifier.weight(1f),
+                    ) { Text(stringResource(R.string.pick_source_file)) }
                 }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = sourceUri?.let { folderLabel(it) }
+                        ?: stringResource(R.string.source_none),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 Spacer(Modifier.height(8.dp))
                 OutlinedButton(
                     onClick = { pickDestination.launch(null) },
@@ -300,7 +316,13 @@ private fun NewJobDialog(
             TextButton(
                 enabled = canStart,
                 onClick = {
-                    onStart(sourceUri!!, destinationUri!!, limitMb!! * MEGABYTE, zipParts)
+                    onStart(
+                        sourceUri!!,
+                        destinationUri!!,
+                        limitMb!! * MEGABYTE,
+                        zipParts,
+                        sourceIsFile,
+                    )
                 },
             ) { Text(stringResource(R.string.start)) }
         },

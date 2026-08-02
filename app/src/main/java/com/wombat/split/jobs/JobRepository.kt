@@ -12,6 +12,7 @@ data class SplitJob(
     val destinationUri: String,
     val limitBytes: Long,
     val zipParts: Boolean,
+    val sourceIsFile: Boolean,
     val status: Status,
 ) {
     sealed interface Status {
@@ -22,7 +23,7 @@ data class SplitJob(
             val partCount: Int,
             val fileCount: Int,
             val totalBytes: Long,
-            val oversizedCount: Int,
+            val chunkedFileCount: Int,
         ) : Status
 
         data class Failed(val message: String) : Status
@@ -50,6 +51,7 @@ object JobRepository {
         destinationUri: String,
         limitBytes: Long,
         zipParts: Boolean,
+        sourceIsFile: Boolean,
     ): SplitJob {
         synchronized(lock) {
             val job = SplitJob(
@@ -59,6 +61,7 @@ object JobRepository {
                 destinationUri = destinationUri,
                 limitBytes = limitBytes,
                 zipParts = zipParts,
+                sourceIsFile = sourceIsFile,
                 status = SplitJob.Status.Queued,
             )
             _jobs.update { it + job }

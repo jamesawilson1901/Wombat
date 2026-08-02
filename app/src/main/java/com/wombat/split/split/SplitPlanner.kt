@@ -1,28 +1,47 @@
 package com.wombat.split.split
 
-/** A file inside the source folder, identified by its path relative to it. */
+/** A file inside the source, identified by its path relative to it. */
 data class SplitFile(val relativePath: String, val size: Long)
 
 /**
  * Pure planning logic: pack files whole into parts that each stay under the
  * byte limit. First-fit-decreasing keeps part counts close to optimal while
- * staying deterministic. Files larger than the limit can never fit; each gets
- * its own part flagged [SplitPart.exceedsLimit] so the UI can warn.
+ * staying deterministic.
+ *
+ * Files larger than the limit can't be packed whole, so they are byte-chunked:
+ * the planner emits one [PlannedPart.Chunk] per limit-sized slice (`.001`,
+ * `.002`, … on disk), keeping every produced part under the limit.
  */
 object SplitPlanner {
 
-    data class SplitPart(
-        val files: List<SplitFile>,
-        val totalBytes: Long,
-        val exceedsLimit: Boolean,
-    )
+    sealed interface PlannedPart {
+        val totalBytes: Long
+
+        data class Files(
+            val files: List<SplitFile>,
+            override val totalBytes: Long,
+        ) : PlannedPart
+
+        data class Chunk(
+            val file: SplitFile,
+            val chunkIndex: Int,
+            val chunkCount: Int,
+            val offset: Long,
+            val length: Long,
+        ) : PlannedPart {
+            override val totalBytes: Long get() = length
+        }
+    }
 
     data class SplitPlan(
-        val parts: List<SplitPart>,
+        val parts: List<PlannedPart>,
         val limitBytes: Long,
     ) {
         val totalBytes: Long get() = parts.sumOf { it.totalBytes }
-        val oversizedCount: Int get() = parts.count { it.exceedsLimit }
+        val chunkedFileCount: Int
+            get() = parts.filterIsInstance<PlannedPart.Chunk>()
+                .distinctBy { it.file.relativePath }
+                .size
     }
 
     fun plan(files: List<SplitFile>, limitBytes: Long): SplitPlan {
@@ -52,14 +71,28 @@ object SplitPlanner {
         }
 
         val packed = bins.mapIndexed { i, bin ->
-            SplitPart(
+            PlannedPart.Files(
                 files = bin.sortedBy { it.relativePath },
                 totalBytes = binSizes[i],
-                exceedsLimit = false,
             )
         }
-        val flagged = oversized.map { SplitPart(listOf(it), it.size, exceedsLimit = true) }
 
-        return SplitPlan(parts = packed + flagged, limitBytes = limitBytes)
+        val chunked = oversized
+            .sortedBy { it.relativePath }
+            .flatMap { file ->
+                val chunkCount = ((file.size + limitBytes - 1) / limitBytes).toInt()
+                (0 until chunkCount).map { i ->
+                    val offset = i.toLong() * limitBytes
+                    PlannedPart.Chunk(
+                        file = file,
+                        chunkIndex = i,
+                        chunkCount = chunkCount,
+                        offset = offset,
+                        length = minOf(limitBytes, file.size - offset),
+                    )
+                }
+            }
+
+        return SplitPlan(parts = packed + chunked, limitBytes = limitBytes)
     }
 }

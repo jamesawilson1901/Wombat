@@ -14,16 +14,18 @@ class JobsViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Creates the job and hands it to the foreground service; returns its name. */
     fun startJob(
-        sourceTree: Uri,
+        source: Uri,
         destinationTree: Uri,
         limitBytes: Long,
         zipParts: Boolean,
+        sourceIsFile: Boolean,
     ): String {
         val job = JobRepository.create(
-            sourceUri = sourceTree.toString(),
+            sourceUri = source.toString(),
             destinationUri = destinationTree.toString(),
             limitBytes = limitBytes,
             zipParts = zipParts,
+            sourceIsFile = sourceIsFile,
         )
         SplitService.start(getApplication(), job.id)
         return job.name
