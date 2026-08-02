@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Launcher icon tile: flat near-black, sampled from design/icon-source.png.
+    <!-- Launcher icon tile: flat near-black, sampled from design/icon-source.png
+         (median of the artwork tile, between its lit and shadowed bands).
          The launcher applies its own mask and shadow — keep this flat. -->
-    <color name="ic_launcher_background">#121214</color>
+    <color name="ic_launcher_background">#16161D</color>
 
     <!-- Window backgrounds shown before Compose draws its first frame. -->
     <color name="wombat_window_background_light">#F5F5F7</color>
-    <color name="wombat_window_background_dark">#121214</color>
+    <color name="wombat_window_background_dark">#16161D</color>
 </resources>

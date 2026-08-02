@@ -7,14 +7,14 @@ import androidx.compose.ui.graphics.Color
 // Material You dynamic colour.
 
 // Neutrals (dark)
-val NearBlack = Color(0xFF121214)      // icon tile background
-val Graphite = Color(0xFF1A1A1E)
-val GraphiteHigh = Color(0xFF222227)
-val Silver = Color(0xFFC9CAD1)         // icon line colour
-val SilverBright = Color(0xFFE4E4E9)
-val SilverDim = Color(0xFF9A9BA3)
-val OutlineDark = Color(0xFF44454C)
-val OutlineVariantDark = Color(0xFF2C2C32)
+val NearBlack = Color(0xFF16161D)      // icon tile background (sampled from source art)
+val Graphite = Color(0xFF1E1E26)
+val GraphiteHigh = Color(0xFF26262F)
+val Silver = Color(0xFFCCCCCE)         // icon line colour (sampled from source art)
+val SilverBright = Color(0xFFE5E5E9)
+val SilverDim = Color(0xFF9B9CA4)
+val OutlineDark = Color(0xFF45464E)
+val OutlineVariantDark = Color(0xFF2E2E37)
 
 // Neutrals (light) — same silver-on-neutral character, inverted
 val Porcelain = Color(0xFFF5F5F7)

@@ -5,7 +5,8 @@ Android app for split jobs. Package: `com.wombat.split`.
 ## Brand
 
 The launcher icon sets the brand: **silver line-art wombat on near-black**
-(`#121214` tile, `#C9CAD1` line). Everything in the UI follows from it.
+(`#16161D` tile, `#CCCCCE` line — both sampled from the source artwork).
+Everything in the UI follows from it.
 
 - **Dark-first fixed theme.** `WombatTheme` (Compose Material 3) uses a fixed
   palette — near-black surfaces, silver/light-grey accents — with **no
@@ -22,13 +23,16 @@ device uses the adaptive icon):
 | Layer | File | Notes |
 | --- | --- | --- |
 | Foreground | `res/drawable/ic_launcher_foreground.xml` | Wombat outline only, transparent bg, scaled inside the 66dp safe zone |
-| Background | `@color/ic_launcher_background` | Flat `#121214` — no baked corners or shadows; the launcher masks and elevates |
+| Background | `@color/ic_launcher_background` | Flat `#16161D` — no baked corners or shadows; the launcher masks and elevates |
 | Monochrome | `res/drawable/ic_launcher_monochrome.xml` | Themed icons on Android 13+ |
 
 Source artwork:
 
-- `design/icon-source.svg` — vector master (108×108 adaptive-icon canvas).
-- `design/icon-source.png` — 1024px brand reference render (rounded tile).
+- `design/icon-source.png` — the original rendered artwork (silver wombat on
+  a near-black rounded tile). This is the source of truth.
+- `design/icon-source.svg` — vector master, hand-traced from the artwork
+  (108×108 adaptive-icon canvas); the drawables derive from it.
+- `design/icon-preview.png` — 1024px render of the vector trace.
 - `art/ic_launcher-playstore.png` — 512px flat square for the Play listing.
 
 To regenerate the PNGs after editing the SVG: `scripts/render-icons.sh`
