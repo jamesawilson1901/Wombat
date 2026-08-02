@@ -234,7 +234,7 @@ private fun NewJobDialog(
     var sourceUri by remember { mutableStateOf<Uri?>(null) }
     var sourceIsFile by remember { mutableStateOf(false) }
     var destinationUri by remember { mutableStateOf<Uri?>(null) }
-    var limitText by remember { mutableStateOf("29") }
+    var limitText by remember { mutableStateOf("25") }
     var zipParts by remember { mutableStateOf(true) }
 
     fun persist(uri: Uri, write: Boolean) {

@@ -17,12 +17,12 @@ import java.util.zip.ZipOutputStream
  * source is never modified.
  *
  * Part layout, for a job named `echidna`:
- * - whole-file part, zip off: folder `echidna-01/` with the files inside
+ * - whole-file part, zip off: folder `echidna_01/` with the files inside
  *   (relative paths preserved)
- * - whole-file part, zip on: `echidna-01.zip` (entries are the relative paths)
- * - chunk of an over-limit file, zip off: folder `echidna-03/` containing
+ * - whole-file part, zip on: `echidna_01.zip` (entries are the relative paths)
+ * - chunk of an over-limit file, zip off: folder `echidna_03/` containing
  *   `video.mp4.001`
- * - chunk of an over-limit file, zip on: loose file `echidna-03_video.mp4.001`
+ * - chunk of an over-limit file, zip on: loose file `echidna_03_video.mp4.001`
  *
  * Chunks reassemble with e.g. `cat video.mp4.* > video.mp4` — zipping a
  * partial slice would add nothing, so chunks are raw in both modes.
@@ -79,7 +79,7 @@ class FolderSplitter(private val context: Context) {
         try {
             plan.parts.forEachIndexed { index, part ->
                 currentCoroutineContext().ensureActive()
-                val partName = "%s-%02d".format(jobName, index + 1)
+                val partName = "%s_%02d".format(jobName, index + 1)
                 when (part) {
                     is PlannedPart.Files -> {
                         if (zipParts) {
