@@ -30,4 +30,5 @@
     <string name="error_source_inaccessible">Source folder is not accessible</string>
     <string name="error_destination_inaccessible">Destination folder is not accessible</string>
     <string name="error_generic">Split failed</string>
+    <string name="error_interrupted">Interrupted — the app was closed mid-split</string>
 </resources>
