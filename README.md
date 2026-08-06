@@ -5,9 +5,13 @@ each stay under a storage limit (e.g. 25 MB). Package: `com.wombat.split`.
 
 ## How it works
 
-1. Pick a folder or a single file to split, a destination folder (Storage
-   Access Framework — no storage permission needed), a part size limit in
-   MB (default 25), and whether to zip each part (default on).
+1. Queue up what you want split: **Add folder** picks one folder at a time
+   (the Storage Access Framework has no multi-folder picker), **Add files**
+   multi-selects any number of files in one trip. Then choose a destination
+   folder, a part size limit in MB (default 25), and whether to zip each
+   part (default on). No storage permission is needed for any of it.
+   Each source becomes its own job with its own name from the animal pool,
+   and the foreground service runs them one after another.
 2. Wombat packs whole files into parts with first-fit-decreasing bin
    packing (`split/SplitPlanner.kt` — pure logic, unit-tested), keeping
    every part under the limit and preserving each file's relative path.
@@ -20,6 +24,8 @@ each stay under a storage limit (e.g. 25 MB). Package: `com.wombat.split`.
    animal pool.
 4. Jobs run in a foreground service with a progress notification and a
    working Cancel action, so they survive the app going to the background.
+   With several queued, the notification also shows "Job 2 of 5"; cancelling
+   one job leaves the rest of the queue running.
    Job history is persisted and survives app restarts; jobs interrupted by
    process death reload as failed.
 

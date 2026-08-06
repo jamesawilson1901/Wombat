@@ -1,6 +1,7 @@
 package com.wombat.split.ui
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -18,7 +19,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -36,6 +39,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -44,7 +48,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.wombat.split.R
 import com.wombat.split.jobs.SplitJob
@@ -107,8 +113,8 @@ fun JobsScreen(viewModel: JobsViewModel = viewModel()) {
     if (showNewJob) {
         NewJobDialog(
             onDismiss = { showNewJob = false },
-            onStart = { source, destination, limitBytes, zipParts, sourceIsFile ->
-                viewModel.startJob(source, destination, limitBytes, zipParts, sourceIsFile)
+            onStart = { sources, destination, limitBytes, zipParts ->
+                viewModel.startJobs(sources, destination, limitBytes, zipParts)
                 showNewJob = false
             },
         )
@@ -227,12 +233,10 @@ private fun NewJobDialog(
         destination: Uri,
         limitBytes: Long,
         zipParts: Boolean,
-        sourceIsFile: Boolean,
     ) -> Unit,
 ) {
     val context = LocalContext.current
-    var sourceUri by remember { mutableStateOf<Uri?>(null) }
-    var sourceIsFile by remember { mutableStateOf(false) }
+    val sources = remember { mutableStateListOf<SourceSelection>() }
     var destinationUri by remember { mutableStateOf<Uri?>(null) }
     var limitText by remember { mutableStateOf("25") }
     var zipParts by remember { mutableStateOf(true) }
@@ -240,45 +244,78 @@ private fun NewJobDialog(
     fun persist(uri: Uri, write: Boolean) {
         val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
             (if (write) Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0)
-        context.contentResolver.takePersistableUriPermission(uri, flags)
+        runCatching { context.contentResolver.takePersistableUriPermission(uri, flags) }
     }
 
+    fun addSource(uri: Uri, isFile: Boolean) {
+        if (sources.any { it.uri == uri }) return
+        persist(uri, write = !isFile)
+        sources += SourceSelection(uri, isFile, sourceLabel(context, uri, isFile))
+    }
+
+    // SAF has no multi-folder picker — folders are added one at a time, while
+    // files can be multi-selected in a single trip to the picker.
     val pickSourceFolder = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
-    ) { uri -> uri?.let { persist(it, write = true); sourceUri = it; sourceIsFile = false } }
-    val pickSourceFile = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri -> uri?.let { persist(it, write = false); sourceUri = it; sourceIsFile = true } }
+    ) { uri -> uri?.let { addSource(it, isFile = false) } }
+    val pickSourceFiles = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris -> uris.forEach { addSource(it, isFile = true) } }
     val pickDestination = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri -> uri?.let { persist(it, write = true); destinationUri = it } }
 
     val limitMb = limitText.toLongOrNull()
-    val canStart = sourceUri != null && destinationUri != null && limitMb != null && limitMb > 0
+    val canStart =
+        sources.isNotEmpty() && destinationUri != null && limitMb != null && limitMb > 0
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.new_job_title)) },
         text = {
-            Column {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Row(modifier = Modifier.fillMaxWidth()) {
                     OutlinedButton(
                         onClick = { pickSourceFolder.launch(null) },
                         modifier = Modifier.weight(1f),
-                    ) { Text(stringResource(R.string.pick_source_folder)) }
+                    ) { Text(stringResource(R.string.add_folder)) }
                     Spacer(Modifier.width(8.dp))
                     OutlinedButton(
-                        onClick = { pickSourceFile.launch(arrayOf("*/*")) },
+                        onClick = { pickSourceFiles.launch(arrayOf("*/*")) },
                         modifier = Modifier.weight(1f),
-                    ) { Text(stringResource(R.string.pick_source_file)) }
+                    ) { Text(stringResource(R.string.add_files)) }
                 }
                 Spacer(Modifier.height(4.dp))
-                Text(
-                    text = sourceUri?.let { folderLabel(it) }
-                        ?: stringResource(R.string.source_none),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                if (sources.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.source_none),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Text(
+                        text = stringResource(R.string.queue_count, sources.size),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    sources.forEach { source ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = source.label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = { sources.remove(source) }) {
+                                Text(stringResource(R.string.remove))
+                            }
+                        }
+                    }
+                }
                 Spacer(Modifier.height(8.dp))
                 OutlinedButton(
                     onClick = { pickDestination.launch(null) },
@@ -317,11 +354,10 @@ private fun NewJobDialog(
                 enabled = canStart,
                 onClick = {
                     onStart(
-                        sourceUri!!,
+                        sources.toList(),
                         destinationUri!!,
                         limitMb!! * MEGABYTE,
                         zipParts,
-                        sourceIsFile,
                     )
                 },
             ) { Text(stringResource(R.string.start)) }
@@ -330,6 +366,16 @@ private fun NewJobDialog(
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
         },
     )
+}
+
+/** Readable name for a picked source: display name for files, path tail for folders. */
+private fun sourceLabel(context: Context, uri: Uri, isFile: Boolean): String {
+    if (isFile) {
+        runCatching { DocumentFile.fromSingleUri(context, uri)?.name }
+            .getOrNull()
+            ?.let { return it }
+    }
+    return folderLabel(uri)
 }
 
 /** Human-ish label for a tree URI, e.g. "primary:Download/Big" -> "Download/Big". */

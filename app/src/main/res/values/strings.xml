@@ -5,9 +5,11 @@
     <string name="empty_state">No split jobs yet.\nPick a big folder and a size limit to get started.</string>
 
     <string name="new_job_title">New split job</string>
-    <string name="pick_source_folder">Split a folder</string>
-    <string name="pick_source_file">Split a file</string>
-    <string name="source_none">Nothing selected yet</string>
+    <string name="add_folder">Add folder</string>
+    <string name="add_files">Add files</string>
+    <string name="remove">Remove</string>
+    <string name="source_none">Nothing selected yet — add folders or files to queue</string>
+    <string name="queue_count">%1$d queued</string>
     <string name="pick_destination">Choose destination folder</string>
     <string name="limit_label">Part size limit (MB)</string>
     <string name="zip_label">Zip each part</string>
@@ -23,6 +25,7 @@
 
     <string name="notification_channel_name">Split jobs</string>
     <string name="notif_running_title">Splitting %1$s…</string>
+    <string name="notif_queue_position">Job %1$d of %2$d</string>
     <string name="notif_done_title">%1$s finished</string>
     <string name="notif_done_text">%1$d parts created</string>
     <string name="notif_cancelled_title">%1$s cancelled</string>

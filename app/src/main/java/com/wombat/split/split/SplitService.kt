@@ -34,10 +34,26 @@ import kotlinx.coroutines.launch
 class SplitService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** Guards [queue], [draining], [batchTotal] and [batchDone]. */
+    private val queueLock = Any()
     private val queue = ArrayDeque<Long>()
-    private var worker: Job? = null
+
+    /** True while a drain loop owns the queue. Handing this flag back happens
+     *  atomically with observing an empty queue, so an enqueue can never slip
+     *  past a finishing drain and strand its job. */
+    private var draining = false
+    private var batchTotal = 0
+    private var batchDone = 0
+
+    @Volatile
     private var currentJob: Job? = null
+
+    @Volatile
     private var currentJobId: Long? = null
+
+    @Volatile
+    private var lastStartId = 0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -52,6 +68,7 @@ class SplitService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        lastStartId = startId
         when (intent?.action) {
             ACTION_RUN -> {
                 val id = intent.getLongExtra(EXTRA_JOB_ID, -1L)
@@ -72,6 +89,17 @@ class SplitService : Service() {
 
     private fun enqueue(id: Long) {
         val job = JobRepository.get(id) ?: return
+        val startWorker = synchronized(queueLock) {
+            queue += id
+            batchTotal++
+            if (draining) {
+                // A drain loop is live and will pick this up on its next turn.
+                false
+            } else {
+                draining = true
+                true
+            }
+        }
         ServiceCompat.startForeground(
             this,
             NOTIFICATION_ID,
@@ -82,14 +110,17 @@ class SplitService : Service() {
                 0
             },
         )
-        synchronized(queue) { queue += id }
-        if (worker?.isActive != true) {
-            worker = scope.launch { drainQueue() }
-        }
+        if (startWorker) scope.launch { drainQueue() }
     }
 
     private fun cancelJob(id: Long) {
-        val removedFromQueue = synchronized(queue) { queue.remove(id) }
+        val removedFromQueue = synchronized(queueLock) {
+            val removed = queue.remove(id)
+            // Drop it from the batch count too, so "3 of 5" doesn't keep
+            // counting jobs that will never run.
+            if (removed) batchTotal--
+            removed
+        }
         if (removedFromQueue) {
             JobRepository.update(id) { it.copy(status = SplitJob.Status.Cancelled) }
         } else if (currentJobId == id) {
@@ -99,16 +130,38 @@ class SplitService : Service() {
 
     private suspend fun drainQueue() {
         while (true) {
-            val id = synchronized(queue) { queue.removeFirstOrNull() } ?: break
+            val id = synchronized(queueLock) {
+                val next = queue.removeFirstOrNull()
+                // Releasing the flag happens under the same lock that observed
+                // the empty queue, so a concurrent enqueue either lands before
+                // this and gets drained, or sees draining == false and starts
+                // a fresh worker. Neither can be lost.
+                if (next == null) draining = false
+                next
+            } ?: break
+
             currentJobId = id
             val inner = scope.launch { runJob(id) }
             currentJob = inner
             inner.join()
             currentJob = null
             currentJobId = null
+            synchronized(queueLock) { batchDone++ }
         }
-        ServiceCompat.stopForeground(this@SplitService, ServiceCompat.STOP_FOREGROUND_REMOVE)
-        stopSelf()
+
+        // Capture the startId together with the stop decision. If an
+        // ACTION_RUN lands after this point it bumps lastStartId, making the
+        // stopSelf below a no-op so the freshly started worker survives.
+        val stopId = synchronized(queueLock) {
+            if (draining || queue.isNotEmpty()) return@synchronized null
+            batchTotal = 0
+            batchDone = 0
+            lastStartId
+        }
+        if (stopId != null) {
+            ServiceCompat.stopForeground(this@SplitService, ServiceCompat.STOP_FOREGROUND_REMOVE)
+            stopSelf(stopId)
+        }
     }
 
     private suspend fun runJob(id: Long) {
@@ -216,9 +269,16 @@ class SplitService : Service() {
         )
         val percent =
             if (bytesTotal > 0) ((bytesCopied * 100) / bytesTotal).toInt() else 0
+
+        // Only worth showing the position when there's actually a queue.
+        val (position, total) = synchronized(queueLock) { (batchDone + 1) to batchTotal }
+        val subtitle =
+            if (total > 1) getString(R.string.notif_queue_position, position, total) else null
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_monochrome)
             .setContentTitle(getString(R.string.notif_running_title, jobName))
+            .setContentText(subtitle)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setProgress(100, percent, indeterminate)
