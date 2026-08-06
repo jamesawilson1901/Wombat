@@ -79,6 +79,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val problems = store.problems
     val watching: StateFlow<Boolean> = store.watching
 
+    /** When a service start was last asked for. Read by readReadiness below. */
+    private var startRequestedAt = 0L
+
     private val _readiness = MutableStateFlow(readReadiness())
     val readiness: StateFlow<Readiness> = _readiness.asStateFlow()
 
@@ -128,8 +131,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun refresh() {
         _readiness.value = readReadiness()
     }
-
-    private var startRequestedAt = 0L
 
     private fun readReadiness() = Readiness(
         allFilesAccess = Environment.isExternalStorageManager(),
