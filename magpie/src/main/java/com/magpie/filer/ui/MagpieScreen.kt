@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -55,6 +56,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.magpie.filer.R
 import com.magpie.filer.core.Formatting
+import com.magpie.filer.core.Naming
 import com.magpie.filer.move.MoveOutcome
 import com.magpie.filer.ui.theme.SectionLabel
 import com.magpie.filer.watch.SpottedFile
@@ -69,9 +71,11 @@ fun MagpieScreen(viewModel: MainViewModel) {
     val selection by viewModel.selection.collectAsState()
     val selecting by viewModel.selecting.collectAsState()
     val step by viewModel.step.collectAsState()
+    val inFolders by viewModel.inFolders.collectAsState()
 
     val context = LocalContext.current
     var showIgnored by rememberSaveable { mutableStateOf(false) }
+    var showInFolders by rememberSaveable { mutableStateOf(false) }
 
     val folderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -79,19 +83,28 @@ fun MagpieScreen(viewModel: MainViewModel) {
 
     val askForNotifications = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { viewModel.refresh() }
+    ) { granted ->
+        if (granted) viewModel.refresh() else viewModel.onNotificationRequestRefused()
+    }
 
-    // The picker opens once per request, keyed on the request's own token.
+    // The picker opens once per request. Keying on the token alone is not
+    // enough: the activity can be recreated while the picker is still on
+    // screen, which would rebuild the composition and launch a second one.
+    var launchedRequest by rememberSaveable { mutableStateOf(-1L) }
     val choosing = step as? FilingStep.ChooseFolder
     LaunchedEffect(choosing?.token) {
-        if (choosing != null) folderPicker.launch(viewModel.lastDestination)
+        val token = choosing?.token
+        if (token != null && token != launchedRequest) {
+            launchedRequest = token
+            folderPicker.launch(viewModel.lastDestination)
+        }
     }
 
     Scaffold(
         bottomBar = {
             if (selecting) {
                 SelectionBar(
-                    count = selection.size,
+                    count = waiting.count { it.path in selection },
                     onSelectAll = viewModel::selectAll,
                     onCancel = viewModel::stopSelecting,
                     onFile = viewModel::fileSelected,
@@ -112,7 +125,11 @@ fun MagpieScreen(viewModel: MainViewModel) {
                     watching = watching,
                     onGrantAccess = { openAllFilesAccess(context, viewModel) },
                     onAllowNotifications = {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        // Android only shows its dialog once. After a refusal the
+                        // only way through is the settings screen.
+                        val canAsk = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                            !viewModel.notificationRequestRefused
+                        if (canAsk) {
                             askForNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
                         } else {
                             openSettings(context, viewModel.notificationSettingsIntent(), viewModel)
@@ -187,6 +204,48 @@ fun MagpieScreen(viewModel: MainViewModel) {
                                 "They are still in their folder, untouched.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
+            item {
+                SectionHeading(
+                    title = "ALREADY IN YOUR FOLDERS",
+                    action = if (showInFolders) "Hide" else "Show",
+                    onAction = {
+                        showInFolders = !showInFolders
+                        if (showInFolders) viewModel.loadInFolders()
+                    },
+                )
+            }
+            if (showInFolders) {
+                if (inFolders.isEmpty()) {
+                    item {
+                        Text(
+                            text = "Nothing else in the folders Magpie watches.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else {
+                    item {
+                        Text(
+                            text = "Files that were already there when Magpie started " +
+                                "watching. They are never offered by notification, but you " +
+                                "can still file one from here.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    items(inFolders, key = { "folder:" + it.path }) { file ->
+                        FileRow(
+                            file = file,
+                            selecting = false,
+                            selected = false,
+                            onTap = { viewModel.beginFiling(file) },
+                            onLongPress = {},
+                            trailing = {},
                         )
                     }
                 }
@@ -425,6 +484,9 @@ private fun SelectionBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                // Scaffold puts the bottom bar flush against the window, and
+                // the app is edge-to-edge, so the inset is ours to add.
+                .navigationBarsPadding()
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -451,6 +513,13 @@ private fun RenameDialog(
 ) {
     var name by rememberSaveable(step.file.path) { mutableStateOf(step.file.name) }
 
+    // What the file will actually be called: characters no folder accepts are
+    // stripped, and the extension is put back if the edit lost it. Showing it
+    // means the rename step never surprises anyone.
+    val stripped = Naming.sanitise(name)
+    val finalName = Naming.withExtensionOf(stripped, step.file.name)
+    val usable = stripped.isNotBlank()
+
     AlertDialog(
         onDismissRequest = onCancel,
         title = { Text("Name it") },
@@ -468,8 +537,23 @@ private fun RenameDialog(
                     value = name,
                     onValueChange = { name = it },
                     singleLine = true,
+                    isError = name.isNotBlank() && !usable,
                     label = { Text("File name") },
                     modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    text = if (usable) {
+                        "Will be saved as \"$finalName\"."
+                    } else {
+                        "That is made only of characters a folder will not accept, " +
+                            "so there would be no name left."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (usable) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    },
                 )
                 if (step.suggestions.size > 1) {
                     Text(
@@ -501,7 +585,7 @@ private fun RenameDialog(
         confirmButton = {
             TextButton(
                 onClick = { onConfirm(name) },
-                enabled = name.isNotBlank(),
+                enabled = usable,
             ) { Text("Move") }
         },
         dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },

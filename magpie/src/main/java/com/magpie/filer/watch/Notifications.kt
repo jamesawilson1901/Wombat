@@ -30,6 +30,13 @@ object Notifications {
     const val ACTION_IGNORE = "com.magpie.filer.action.IGNORE"
     const val EXTRA_PATH = "com.magpie.filer.extra.PATH"
 
+    /**
+     * Identifies one tap. Android hands an activity its launch intent back when
+     * the process is recreated, so without something to compare against, a tap
+     * from days ago reopens the folder picker on a plain relaunch.
+     */
+    const val EXTRA_TOKEN = "com.magpie.filer.extra.TOKEN"
+
     private const val SELF_DISMISS_MILLIS = 4L * 60L * 1000L
 
     fun createChannels(context: Context) {
@@ -105,6 +112,7 @@ object Notifications {
             Intent(context, MainActivity::class.java)
                 .setAction(ACTION_FILE)
                 .putExtra(EXTRA_PATH, file.path)
+                .putExtra(EXTRA_TOKEN, "${file.path}@${file.spottedAt}")
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )

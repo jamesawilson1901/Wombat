@@ -18,9 +18,14 @@ data class Problem(val id: Long, val message: String)
  * Everything Magpie remembers between runs, and the single source of truth the
  * watcher and the screen both read.
  *
- * Kept small on purpose: a waiting list, an ignored list, the set of files
- * already seen, and whether watching is on. There is no move history and no
- * undo stack — those are deliberately out of scope.
+ * Kept small on purpose: a waiting list, an ignored list, the files it has
+ * already offered, and when it started watching each folder. There is no move
+ * history and no undo stack — those are deliberately out of scope.
+ *
+ * "Old" is decided by a timestamp per folder, not by remembering every file
+ * that was in it. That matters: a folder with thousands of files would overflow
+ * any remembered-paths list, and everything that fell off the end would be
+ * offered again as though it were new.
  */
 class FileStore private constructor(private val prefs: SharedPreferences) {
 
@@ -28,12 +33,17 @@ class FileStore private constructor(private val prefs: SharedPreferences) {
         private const val PREFS = "magpie"
         private const val KEY_WAITING = "waiting"
         private const val KEY_IGNORED = "ignored"
-        private const val KEY_SEEN = "seen"
+        private const val KEY_OFFERED = "offered"
+        private const val KEY_BASELINES = "baselines"
         private const val KEY_WATCHING = "watching"
         private const val KEY_DESTINATION = "destination"
+        private const val KEY_LAST_NOTIFICATION = "lastNotification"
 
-        /** Plenty for months of downloads, and pruned against the disk anyway. */
-        private const val SEEN_LIMIT = 4_000
+        /**
+         * Only files Magpie has actually offered land here, so this grows with
+         * use rather than with the size of the Downloads folder.
+         */
+        private const val OFFERED_LIMIT = 4_000
 
         @Volatile
         private var instance: FileStore? = null
@@ -60,7 +70,10 @@ class FileStore private constructor(private val prefs: SharedPreferences) {
     val ignored: StateFlow<List<SpottedFile>> = _ignored.asStateFlow()
 
     /** Insertion-ordered, so the oldest entries fall off the end first. */
-    private val seen = LinkedHashSet(readStrings(KEY_SEEN, "list of files already seen"))
+    private val offered = LinkedHashSet(readStrings(KEY_OFFERED, "list of files already offered"))
+
+    /** Watched folder path to the moment Magpie started watching it. */
+    private val baselines = readBaselines()
 
     private val _problems = MutableStateFlow(
         startupProblems.mapIndexed { index, message -> Problem(index + 1L, message) }
@@ -72,35 +85,56 @@ class FileStore private constructor(private val prefs: SharedPreferences) {
     private val _watching = MutableStateFlow(prefs.getBoolean(KEY_WATCHING, false))
     val watching: StateFlow<Boolean> = _watching.asStateFlow()
 
-    // ---- what has already been offered -------------------------------------
+    // ---- what counts as old ------------------------------------------------
 
-    fun isKnown(path: String): Boolean = synchronized(lock) { path in seen }
+    /**
+     * When Magpie started watching [root]. The first call for a folder sets it
+     * to [now] and returns that, so everything already in the folder is older
+     * than the baseline and is never offered.
+     *
+     * Survives a restart on purpose: a file that arrived while the service was
+     * dead is newer than the baseline, so it is still offered when Magpie comes
+     * back rather than being lost.
+     */
+    fun baselineFor(root: String, now: Long): Long = synchronized(lock) {
+        val existing = baselines[root]
+        if (existing != null) return@synchronized existing
+        baselines[root] = now
+        writeBaselines()
+        now
+    }
 
-    /** Mark a file as old without offering it. This is how the baseline is built. */
-    fun remember(path: String) {
+    /**
+     * Start again from now. Called when the user switches watching on, so that
+     * turning it off for a fortnight and on again does not offer a fortnight of
+     * downloads in one go.
+     */
+    fun resetBaselines() {
         synchronized(lock) {
-            if (seen.add(path)) {
-                trimSeen()
-                writeStrings(KEY_SEEN, seen)
+            baselines.clear()
+            writeBaselines()
+        }
+    }
+
+    fun isOffered(path: String): Boolean = synchronized(lock) { path in offered }
+
+    /**
+     * Note a file as dealt with without offering it. Used for the copies Magpie
+     * itself writes into a folder it is watching — otherwise it would spot its
+     * own work and offer it straight back.
+     */
+    fun markOffered(path: String) {
+        synchronized(lock) {
+            if (offered.add(path)) {
+                trimOffered()
+                writeStrings(KEY_OFFERED, offered)
             }
         }
     }
 
-    fun rememberAll(paths: Collection<String>) {
-        if (paths.isEmpty()) return
-        synchronized(lock) {
-            var changed = false
-            for (path in paths) changed = seen.add(path) || changed
-            if (changed) {
-                trimSeen()
-                writeStrings(KEY_SEEN, seen)
-            }
-        }
-    }
-
-    private fun trimSeen() {
-        while (seen.size > SEEN_LIMIT) {
-            seen.remove(seen.first())
+    private fun trimOffered() {
+        while (offered.size > OFFERED_LIMIT) {
+            offered.remove(offered.first())
         }
     }
 
@@ -108,18 +142,18 @@ class FileStore private constructor(private val prefs: SharedPreferences) {
 
     /**
      * Offer a newly settled file. True means it went onto the waiting list,
-     * which is also the signal to post its notification. False means it was
-     * already known, already waiting, or has been ignored.
+     * which is also the signal to post its notification. False means it has
+     * been offered before, is already waiting, or has been ignored.
      */
     fun offer(file: SpottedFile): Boolean = synchronized(lock) {
         when {
-            file.path in seen -> false
+            file.path in offered -> false
             _waiting.value.any { it.path == file.path } -> false
             _ignored.value.any { it.path == file.path } -> false
             else -> {
-                seen.add(file.path)
-                trimSeen()
-                writeStrings(KEY_SEEN, seen)
+                offered.add(file.path)
+                trimOffered()
+                writeStrings(KEY_OFFERED, offered)
                 _waiting.value = _waiting.value + file
                 writeFiles(KEY_WAITING, _waiting.value)
                 true
@@ -164,42 +198,47 @@ class FileStore private constructor(private val prefs: SharedPreferences) {
         }
     }
 
-    fun forgetIgnored(path: String) {
-        synchronized(lock) {
-            val remaining = _ignored.value.filterNot { it.path == path }
-            if (remaining.size != _ignored.value.size) {
-                _ignored.value = remaining
-                writeFiles(KEY_IGNORED, remaining)
-            }
-        }
-    }
-
     /**
-     * Drop entries whose file is no longer on disk. Files leave by other routes
-     * — a file manager, the browser's own cleanup — and a list full of names
-     * that lead nowhere is worse than an empty one.
+     * Drop entries whose file has genuinely been deleted. Files leave by other
+     * routes — a file manager, the browser's own cleanup — and a list full of
+     * names that lead nowhere is worse than an empty one.
+     *
+     * A file on a card that has been taken out has not been deleted, so it is
+     * kept. Getting that wrong would empty the lists every time a card is
+     * unplugged, and would let an ignored file come back as a notification.
      *
      * Touches the disk; call it from a background thread.
      */
     fun pruneMissing() {
         synchronized(lock) {
-            val liveWaiting = _waiting.value.filter { File(it.path).exists() }
+            val liveWaiting = _waiting.value.filterNot { deleted(it.path) }
             if (liveWaiting.size != _waiting.value.size) {
                 _waiting.value = liveWaiting
                 writeFiles(KEY_WAITING, liveWaiting)
             }
-            val liveIgnored = _ignored.value.filter { File(it.path).exists() }
+            val liveIgnored = _ignored.value.filterNot { deleted(it.path) }
             if (liveIgnored.size != _ignored.value.size) {
                 _ignored.value = liveIgnored
                 writeFiles(KEY_IGNORED, liveIgnored)
             }
-            val liveSeen = seen.filterTo(LinkedHashSet()) { File(it).exists() }
-            if (liveSeen.size != seen.size) {
-                seen.clear()
-                seen.addAll(liveSeen)
-                writeStrings(KEY_SEEN, seen)
+            val liveOffered = offered.filterNotTo(LinkedHashSet()) { deleted(it) }
+            if (liveOffered.size != offered.size) {
+                offered.clear()
+                offered.addAll(liveOffered)
+                writeStrings(KEY_OFFERED, offered)
             }
         }
+    }
+
+    /**
+     * True only when the file is definitely gone. If the folder it lived in is
+     * not readable, the volume is away rather than the file deleted.
+     */
+    private fun deleted(path: String): Boolean {
+        val file = File(path)
+        if (file.exists()) return false
+        val parent = file.parentFile ?: return false
+        return parent.isDirectory && parent.canRead()
     }
 
     // ---- watching ----------------------------------------------------------
@@ -214,6 +253,17 @@ class FileStore private constructor(private val prefs: SharedPreferences) {
         get() = prefs.getString(KEY_DESTINATION, null)?.let(Uri::parse)
         set(value) {
             prefs.edit().putString(KEY_DESTINATION, value?.toString()).apply()
+        }
+
+    /**
+     * The last notification tap that was acted on. Android hands an activity its
+     * launch intent again when the process is recreated, so without this the
+     * same tap reopens the folder picker days later.
+     */
+    var lastHandledNotification: String?
+        get() = prefs.getString(KEY_LAST_NOTIFICATION, null)
+        set(value) {
+            prefs.edit().putString(KEY_LAST_NOTIFICATION, value).apply()
         }
 
     // ---- problems ----------------------------------------------------------
@@ -280,6 +330,28 @@ class FileStore private constructor(private val prefs: SharedPreferences) {
         val array = JSONArray()
         for (value in values) array.put(value)
         prefs.edit().putString(key, array.toString()).apply()
+    }
+
+    private fun readBaselines(): MutableMap<String, Long> {
+        val raw = prefs.getString(KEY_BASELINES, null) ?: return HashMap()
+        return try {
+            val json = JSONObject(raw)
+            val out = HashMap<String, Long>(json.length())
+            for (key in json.keys()) out[key] = json.optLong(key)
+            out
+        } catch (e: JSONException) {
+            prefs.edit().remove(KEY_BASELINES).apply()
+            startupProblems += "Magpie's record of when it started watching each folder " +
+                "could not be read (${e.message ?: "it was not valid JSON"}). Watching starts " +
+                "again from now, so anything already in those folders is treated as old."
+            HashMap()
+        }
+    }
+
+    private fun writeBaselines() {
+        val json = JSONObject()
+        for ((root, at) in baselines) json.put(root, at)
+        prefs.edit().putString(KEY_BASELINES, json.toString()).apply()
     }
 
     private fun readArray(key: String, description: String): JSONArray? {

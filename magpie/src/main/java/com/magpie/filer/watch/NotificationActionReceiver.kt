@@ -8,19 +8,34 @@ import android.content.Intent
 class NotificationActionReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
-        val store = FileStore.get(context)
-        when (intent.action) {
-            Notifications.ACTION_IGNORE -> {
-                val path = intent.getStringExtra(Notifications.EXTRA_PATH) ?: return
-                val file = store.waiting.value.firstOrNull { it.path == path }
-                store.ignore(path)
-                if (file != null) Notifications.cancel(context, file)
-            }
+        val action = intent.action ?: return
+        val path = intent.getStringExtra(Notifications.EXTRA_PATH)
+        val app = context.applicationContext
 
-            WatchService.ACTION_STOP -> {
-                store.setWatching(false)
-                WatchService.stop(context)
+        // Reaching the store reads and parses a saved list, and this receiver
+        // can be the thing that cold-starts the process. That is not work for
+        // the main thread.
+        val pending = goAsync()
+        Thread {
+            try {
+                val store = FileStore.get(app)
+                when (action) {
+                    Notifications.ACTION_IGNORE -> {
+                        if (path != null) {
+                            val file = store.waiting.value.firstOrNull { it.path == path }
+                            store.ignore(path)
+                            if (file != null) Notifications.cancel(app, file)
+                        }
+                    }
+
+                    WatchService.ACTION_STOP -> {
+                        store.setWatching(false)
+                        WatchService.stop(app)
+                    }
+                }
+            } finally {
+                pending.finish()
             }
-        }
+        }.start()
     }
 }

@@ -14,7 +14,9 @@ import com.magpie.filer.move.Mover
 import com.magpie.filer.watch.FileStore
 import com.magpie.filer.watch.Notifications
 import com.magpie.filer.watch.SpottedFile
+import com.magpie.filer.watch.WatchRoots
 import com.magpie.filer.watch.WatchService
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -23,6 +25,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** What Android is currently letting Magpie do. */
 data class Readiness(
@@ -53,6 +56,11 @@ sealed interface FilingStep {
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
+    private companion object {
+        /** Enough to find something; not so many that the screen becomes a file manager. */
+        const val IN_FOLDERS_LIMIT = 60
+    }
+
     private val app = application
     private val store = FileStore.get(application)
     private val mover = Mover(application)
@@ -78,6 +86,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** The folder the picker should open at, if one has been used before. */
     val lastDestination: Uri? get() = store.destination
 
+    /**
+     * What is in the watched folders right now, minus anything already waiting
+     * or ignored. Files that were already there when watching started are never
+     * offered by notification, but the spec is clear that they must still be
+     * reachable from the app — this is how.
+     */
+    private val _inFolders = MutableStateFlow<List<SpottedFile>>(emptyList())
+    val inFolders: StateFlow<List<SpottedFile>> = _inFolders.asStateFlow()
+
+    /**
+     * Set once Android has refused POST_NOTIFICATIONS. After that the system
+     * dialog never appears again, so the button has to go to settings instead
+     * of becoming a control that does nothing.
+     */
+    var notificationRequestRefused: Boolean = false
+        private set
+
+    fun onNotificationRequestRefused() {
+        notificationRequestRefused = true
+        refresh()
+    }
+
     private var nextToken = 1L
 
     override fun onCleared() {
@@ -100,6 +130,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setWatching(on: Boolean) {
         store.setWatching(on)
         if (on) {
+            // Watching starts from now: turning it off for a fortnight and back
+            // on should not offer a fortnight of downloads in one go.
+            store.resetBaselines()
             val failure = WatchService.start(app)
             if (failure != null) {
                 store.report(failure)
@@ -123,12 +156,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         store.restore(file.path)
     }
 
-    fun forgetIgnored(file: SpottedFile) {
-        store.forgetIgnored(file.path)
-    }
-
     fun dismissProblem(id: Long) {
         store.dismissProblem(id)
+    }
+
+    /** Read the watched folders so older files can be filed by hand. */
+    fun loadInFolders() {
+        scope.launch {
+            val found = withContext(Dispatchers.IO) { readInFolders() }
+            _inFolders.value = found
+        }
+    }
+
+    private fun readInFolders(): List<SpottedFile> {
+        val alreadyListed = (waiting.value + ignored.value).map { it.path }.toSet()
+        val found = ArrayList<SpottedFile>()
+        for (root in WatchRoots.discover(app)) {
+            val children = root.directory.listFiles()
+            if (children == null) {
+                store.report(
+                    "Magpie cannot read ${root.label} (${root.path}), so what is in it " +
+                        "cannot be listed. Check all-files access in Android settings."
+                )
+                continue
+            }
+            for (child in children) {
+                if (!child.isFile) continue
+                if (Naming.isTemporary(child.name)) continue
+                if (child.absolutePath in alreadyListed) continue
+                found += SpottedFile(
+                    path = child.absolutePath,
+                    name = child.name,
+                    size = child.length(),
+                    source = root.label,
+                    spottedAt = child.lastModified(),
+                )
+            }
+        }
+        return found.sortedByDescending { it.spottedAt }.take(IN_FOLDERS_LIMIT)
     }
 
     // ---- selection ---------------------------------------------------------
@@ -166,14 +231,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Start filing one file: the folder picker opens first, every time. */
     fun beginFiling(file: SpottedFile) {
-        _step.value = FilingStep.ChooseFolder(nextToken++, listOf(file))
+        if (!startFiling(listOf(file))) {
+            store.report(
+                "Magpie is already filing something. Finish that one — or cancel it — " +
+                    "and then tap ${file.name} again."
+            )
+        }
     }
 
     /** Start filing everything ticked. Renaming is skipped for a batch. */
     fun fileSelected() {
         val chosen = waiting.value.filter { it.path in _selection.value }
         if (chosen.isEmpty()) return
-        _step.value = FilingStep.ChooseFolder(nextToken++, chosen)
+        startFiling(chosen)
+    }
+
+    /** False when a filing flow is already in progress, so nothing is stranded. */
+    private fun startFiling(files: List<SpottedFile>): Boolean {
+        if (_step.value !is FilingStep.Idle) return false
+        _step.value = FilingStep.ChooseFolder(nextToken++, files)
+        return true
     }
 
     fun onFolderChosen(uri: Uri?) {
@@ -227,11 +304,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun confirmRename(newName: String) {
         val renaming = _step.value as? FilingStep.Rename ?: return
-        val cleaned = Naming.withExtensionOf(
-            Naming.sanitise(newName),
-            renaming.file.name,
+        val stripped = Naming.sanitise(newName)
+        if (stripped.isBlank()) {
+            // Everything typed was a character no folder accepts. Appending the
+            // extension anyway would file the only copy as a hidden dotfile.
+            store.report(
+                "\"$newName\" is made only of characters a folder will not accept, so " +
+                    "there would be no name left. Nothing was moved — try another name."
+            )
+            _step.value = FilingStep.Idle
+            return
+        }
+        startMoves(
+            listOf(renaming.file),
+            renaming.tree,
+            rename = Naming.withExtensionOf(stripped, renaming.file.name),
         )
-        startMoves(listOf(renaming.file), renaming.tree, rename = cleaned)
     }
 
     fun cancelFiling() {
@@ -250,15 +338,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 else "Moving ${files.size} files…"
             )
 
+            val folder = Destinations.folderPath(tree)
             val outcomes = ArrayList<MoveOutcome>(files.size)
             for (file in files) {
                 val outcome = mover.move(file, tree, rename ?: file.name)
-                // Only a verified copy takes a file off the list. Anything else
-                // stays where it is, in both senses.
-                if (outcome is MoveOutcome.Moved || outcome is MoveOutcome.OriginalRemains) {
-                    store.drop(file.path)
-                    Notifications.cancel(app, file)
+
+                // Filing into a folder Magpie watches would otherwise have it
+                // spot its own copy a moment later and offer it straight back.
+                val savedAs = when (outcome) {
+                    is MoveOutcome.Moved -> outcome.savedAs
+                    is MoveOutcome.OriginalRemains -> outcome.savedAs
+                    else -> null
                 }
+                if (folder != null && savedAs != null) {
+                    store.markOffered(File(folder, savedAs).absolutePath)
+                }
+
+                // Only a completed move takes a file off the list. If the copy
+                // worked but the original could not be deleted, the original is
+                // still sitting there and the user may still want to deal with it.
+                if (outcome is MoveOutcome.Moved) store.drop(file.path)
+                if (outcome !is MoveOutcome.Failed) Notifications.cancel(app, file)
+
                 outcomes += outcome
             }
 
@@ -269,6 +370,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ---- opened from a notification ----------------------------------------
+
+    /**
+     * True the first time a given notification tap is seen. Android replays an
+     * activity's launch intent when it recreates the process, and acting on
+     * that replay would reopen the folder picker out of nowhere.
+     */
+    fun claimNotification(token: String): Boolean {
+        if (store.lastHandledNotification == token) return false
+        store.lastHandledNotification = token
+        return true
+    }
 
     fun fileByPath(path: String) {
         val file = waiting.value.firstOrNull { it.path == path }

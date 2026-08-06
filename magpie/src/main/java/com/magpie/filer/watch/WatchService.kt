@@ -7,6 +7,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.FileObserver
 import android.os.IBinder
+import java.util.concurrent.ConcurrentHashMap
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.magpie.filer.core.Naming
@@ -49,6 +50,9 @@ class WatchService : Service() {
         /** Re-reading mounted volumes is a binder call; it does not need doing often. */
         private const val ROOT_REFRESH_MILLIS = 15_000L
 
+        /** Most notifications one sweep will post. The rest still go on the list. */
+        private const val NOTIFICATION_BURST_LIMIT = 5
+
         private const val OBSERVER_MASK =
             FileObserver.CREATE or FileObserver.CLOSE_WRITE or
                 FileObserver.MOVED_TO or FileObserver.MOVED_FROM or FileObserver.DELETE
@@ -84,20 +88,23 @@ class WatchService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val tracker = StabilityTracker()
-    private val observers = mutableMapOf<String, FileObserver>()
-
-    /** Folders whose existing contents have already been written off as old. */
-    private val baselined = mutableSetOf<String>()
+    // Written from the watch coroutine, cleared from the main thread in onDestroy.
+    private val observers = ConcurrentHashMap<String, FileObserver>()
 
     private lateinit var store: FileStore
 
     @Volatile
     private var hurryUntil = 0L
 
+    // Written by the watch coroutine, read by onStartCommand on the main thread.
+    @Volatile
     private var roots: List<WatchRoot> = emptyList()
+
+    @Volatile
+    private var postedFolderCount = -1
+
     private var rootsCheckedAt = 0L
     private var lastPruneAt = 0L
-    private var postedFolderCount = -1
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -196,6 +203,7 @@ class WatchService : Service() {
 
     private fun sweep(now: Long) {
         val live = HashSet<String>()
+        var notified = 0
 
         for (root in roots) {
             val children = root.directory.listFiles()
@@ -207,12 +215,12 @@ class WatchService : Service() {
                 continue
             }
 
-            // A folder Magpie has not watched before — first run, or a card just
-            // inserted — starts with everything in it written off as old, so
-            // switching Magpie on never produces a hundred notifications.
-            if (baselined.add(root.path)) {
-                store.rememberAll(children.filter { it.isFile }.map { it.absolutePath })
-            }
+            // Everything already in a folder when Magpie starts watching it is
+            // older than that folder's baseline, so switching Magpie on never
+            // produces a hundred notifications. The baseline is a timestamp
+            // rather than a list of filenames, so it holds for a folder of any
+            // size and survives a card being taken out and put back.
+            val since = store.baselineFor(root.path, now)
 
             for (child in children) {
                 if (!child.isFile) continue
@@ -221,7 +229,7 @@ class WatchService : Service() {
                 val path = child.absolutePath
                 live += path
 
-                if (store.isKnown(path)) {
+                if (store.isOffered(path) || child.lastModified() < since) {
                     tracker.forget(path)
                     continue
                 }
@@ -235,7 +243,13 @@ class WatchService : Service() {
                     spottedAt = now,
                 )
                 tracker.forget(path)
-                if (store.offer(spotted)) {
+                if (!store.offer(spotted)) continue
+
+                // Everything found goes on the waiting list; only the run of
+                // notifications is capped, so coming back from a long spell of
+                // being killed does not bury the notification shade.
+                if (notified < NOTIFICATION_BURST_LIMIT) {
+                    notified++
                     Notifications.offer(this, spotted)?.let(store::report)
                 }
             }

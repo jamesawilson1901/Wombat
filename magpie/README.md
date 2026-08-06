@@ -57,9 +57,21 @@ There is no API for this, so it is inferred:
 - A file counts as finished when its size is non-zero and unchanged between two
   consecutive looks at least ~2.2 seconds apart.
 
-When Magpie starts watching a folder for the first time, everything already in
-it is written off as old, so switching Magpie on does not produce a hundred
-notifications. Those files are still reachable — they are simply not offered.
+When Magpie starts watching a folder, it records the time and treats everything
+older than that as old, so switching Magpie on does not produce a hundred
+notifications. Those files are still reachable: **Already in your folders** on
+the main screen lists what is in the watched folders now, and you can file any
+of it by hand.
+
+The baseline is a timestamp per folder, not a list of filenames. That matters in
+three places: it works for a folder with ten thousand files in it, it survives a
+card being taken out and put back, and it survives the service being killed — so
+a file that arrived while Magpie was dead is still offered when it comes back.
+Turning watching off and on again starts the baseline afresh from that moment.
+
+If a lot of files turn up at once, all of them go on the waiting list but only
+the first five in each sweep get a notification. Coming back from a day of being
+killed should not bury your notification shade.
 
 ## Moving a file
 
@@ -104,14 +116,45 @@ Renaming is skipped for batch moves.
 Deliberately out of scope. Magpie keeps a waiting list, an ignored list, and the
 set of files it has already seen. It does not keep a log of what it moved.
 
+## What was actually run, and what was not
+
+Being straight about this, because it changes how much you should trust it on
+first install:
+
+- **Compiled and tested on CI, every push.** `gradle :magpie:assembleDebug`
+  produces the APK and `gradle :magpie:testDebugUnitTest` runs green. The unit
+  tests cover filename tidying and suggestions, size and file-type wording, and
+  the finished-arriving rule.
+- **Never run on a device or an emulator.** Nothing in this app has been
+  executed on Android. Everything below the pure-Kotlin layer — the watcher, the
+  foreground service, the notifications, every move, and the whole UI — is
+  reviewed and reasoned about, not observed working.
+
+What that means in practice: the first thing to try is one small file, into a
+folder on internal storage, and check the copy arrived before trusting it with
+anything that matters. Then try one onto the SD card.
+
+The specific things worth watching for, because they are the least certain:
+
+- **The `specialUse` foreground service type.** If ColorOS objects to it, the
+  service will not start and the toggle will say so. `dataSync` is also declared,
+  so switching `goForeground()` in `WatchService.kt` back to
+  `FOREGROUND_SERVICE_TYPE_DATA_SYNC` is a one-line fallback.
+- **Whether ColorOS lets the service live at all**, even with the battery
+  settings above. This is the risk the whole app rests on and it cannot be
+  checked from here.
+- **SD card discovery.** Volume IDs and the `Download` vs `Downloads` spelling
+  vary by manufacturer; both are tried, but only a real card proves it.
+- **Which storage provider your file manager uses for the picker.** The
+  same-folder check and the "do not re-offer our own copy" logic only understand
+  Android's own storage provider. With anything else they quietly do nothing —
+  the move still works and is still verified.
+- **Whether `DocumentsContract.createDocument` keeps your extension** for a file
+  type outside the built-in table. If a provider appends its own, the outcome
+  message tells you the name it actually used.
+
 ## Known limits, honestly
 
-- **Files that arrive while the service is dead are treated as old.** When the
-  service restarts it re-baselines every watched folder, so anything that landed
-  in the meantime is never offered. Nothing is lost — those files are sitting in
-  Downloads exactly where the browser put them — but you will have to file them
-  by hand. This is the price of not flooding you with notifications after a
-  restart.
 - **Only the top level of each folder is watched**, not subfolders.
 - **Android may still group notifications** once several are showing. Magpie
   sets no group itself, but the system's own bundling is out of its hands.

@@ -43,8 +43,14 @@ class MainActivity : ComponentActivity() {
     private fun openFileFrom(intent: Intent?) {
         if (intent?.action != Notifications.ACTION_FILE) return
         val path = intent.getStringExtra(Notifications.EXTRA_PATH) ?: return
-        // Clear it so a rotation does not reopen the picker.
+        val token = intent.getStringExtra(Notifications.EXTRA_TOKEN) ?: path
+
+        // Clearing the extra covers a rotation, but Android keeps its own copy
+        // of the launch intent and hands it back after process death — so the
+        // tap is also recorded, and a repeat of the same one is ignored.
         intent.removeExtra(Notifications.EXTRA_PATH)
+        if (!viewModel.claimNotification(token)) return
+
         viewModel.fileByPath(path)
     }
 }

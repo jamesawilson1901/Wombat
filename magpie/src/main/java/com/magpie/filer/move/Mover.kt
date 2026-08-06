@@ -2,7 +2,6 @@ package com.magpie.filer.move
 
 import android.content.Context
 import android.net.Uri
-import android.os.Environment
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import com.magpie.filer.core.Formatting
@@ -33,7 +32,6 @@ class Mover(private val context: Context) {
 
     private companion object {
         const val BUFFER_BYTES = 256 * 1024
-        const val EXTERNAL_STORAGE_AUTHORITY = "com.android.externalstorage.documents"
     }
 
     suspend fun move(source: SpottedFile, treeUri: Uri, targetName: String): MoveOutcome =
@@ -157,7 +155,8 @@ class Mover(private val context: Context) {
         }
         val savedAs = nameLookup.getOrNull() ?: targetName
         if (savedAs != targetName) {
-            notes += "Saved as \"$savedAs\" — something called \"$targetName\" was already there."
+            notes += "Saved as \"$savedAs\" rather than \"$targetName\" — the folder chose " +
+                "the name, usually because something with that name was already there."
         }
 
         val deleted = attempt { file.delete() }
@@ -227,13 +226,17 @@ class Mover(private val context: Context) {
         val removed = attempt {
             DocumentsContract.deleteDocument(context.contentResolver, created)
         }
+        val leftBehind = " so an incomplete \"$targetName\" may be sitting in $destination — " +
+            "delete it by hand. Your original is untouched."
         return when {
             removed.getOrDefault(false) ->
                 " The part-written copy was removed; your original is untouched."
 
-            else -> " The part-written copy could NOT be removed either, so an incomplete " +
-                "\"$targetName\" may be sitting in $destination — delete it by hand. " +
-                "Your original is untouched."
+            removed.isFailure ->
+                " The part-written copy could not be removed either " +
+                    "(${reason(removed.exceptionOrNull())}),$leftBehind"
+
+            else -> " $destination refused to remove the part-written copy,$leftBehind"
         }
     }
 
@@ -250,27 +253,10 @@ class Mover(private val context: Context) {
                 if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getString(0) else null
             }
 
-    /**
-     * True when the chosen folder is the one the file is already in.
-     *
-     * Only the system's own storage provider is understood here, which is the
-     * one the picker uses for anything on the phone or the card. For anything
-     * else this answers false and the move goes ahead as a normal copy.
-     */
+    /** True when the chosen folder is the one the file is already in. */
     private fun isSameFolder(treeUri: Uri, sourceFolder: File?): Boolean {
         if (sourceFolder == null) return false
-        if (treeUri.authority != EXTERNAL_STORAGE_AUTHORITY) return false
-        val id = attempt { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull() ?: return false
-        val volume = id.substringBefore(':')
-        val relative = id.substringAfter(':', "").trim('/')
-
-        @Suppress("DEPRECATION")
-        val root = if (volume == "primary") {
-            Environment.getExternalStorageDirectory()
-        } else {
-            File("/storage/$volume")
-        }
-        val chosen = if (relative.isEmpty()) root else File(root, relative)
+        val chosen = Destinations.folderPath(treeUri) ?: return false
         return chosen.absolutePath == sourceFolder.absolutePath
     }
 

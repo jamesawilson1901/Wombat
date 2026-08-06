@@ -22,12 +22,18 @@ class StabilityTracker(private val settleMillis: Long = 2_200L) {
      * calls [forget] — the caller decides when it has acted on the file.
      */
     fun observe(path: String, size: Long, now: Long): Boolean {
+        if (size <= 0L) {
+            // A file that is still empty is not measurably mid-flight. Holding
+            // it would keep the watcher polling fast for as long as it sat
+            // there, which on a phone means burning battery for nothing.
+            looks.remove(path)
+            return false
+        }
         val previous = looks[path]
         if (previous == null || previous.size != size) {
             looks[path] = Look(size, now)
             return false
         }
-        if (size <= 0L) return false
         return now - previous.at >= settleMillis
     }
 

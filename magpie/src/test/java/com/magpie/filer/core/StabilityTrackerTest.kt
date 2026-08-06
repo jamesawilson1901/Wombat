@@ -49,6 +49,19 @@ class StabilityTrackerTest {
     }
 
     @Test
+    fun `an empty file is not held as pending, so the watcher can idle`() {
+        tracker.observe("/a.zip", 0, now = 0)
+        assertEquals(0, tracker.pending)
+    }
+
+    @Test
+    fun `a file that starts empty is still caught once it grows`() {
+        assertFalse(tracker.observe("/a.zip", 0, now = 0))
+        assertFalse(tracker.observe("/a.zip", 8_000, now = 2_500))
+        assertTrue(tracker.observe("/a.zip", 8_000, now = 5_000))
+    }
+
+    @Test
     fun `files that vanish stop being tracked`() {
         tracker.observe("/a.zip", 10, now = 0)
         tracker.observe("/b.zip", 10, now = 0)
