@@ -21,6 +21,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -59,6 +60,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
         /** Enough to find something; not so many that the screen becomes a file manager. */
         const val IN_FOLDERS_LIMIT = 60
+
+        /**
+         * startForegroundService only queues the start, so the service is not
+         * running yet when the switch flips. Long enough for onCreate to have
+         * happened, short enough that a real failure still surfaces.
+         */
+        const val SERVICE_START_GRACE_MILLIS = 6_000L
     }
 
     private val app = application
@@ -121,10 +129,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _readiness.value = readReadiness()
     }
 
+    private var startRequestedAt = 0L
+
     private fun readReadiness() = Readiness(
         allFilesAccess = Environment.isExternalStorageManager(),
         notificationsAllowed = NotificationManagerCompat.from(app).areNotificationsEnabled(),
-        serviceRunning = WatchService.isRunning,
+        // Just after asking for a start there is nothing running yet, and saying
+        // so would accuse Android of killing a service it has not begun.
+        serviceRunning = WatchService.isRunning ||
+            System.currentTimeMillis() - startRequestedAt < SERVICE_START_GRACE_MILLIS,
     )
 
     fun setWatching(on: Boolean) {
@@ -133,12 +146,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // Watching starts from now: turning it off for a fortnight and back
             // on should not offer a fortnight of downloads in one go.
             store.resetBaselines()
+            startRequestedAt = System.currentTimeMillis()
             val failure = WatchService.start(app)
             if (failure != null) {
+                startRequestedAt = 0L
                 store.report(failure)
                 store.setWatching(false)
+            } else {
+                // Come back once the service has had time to start, so the card
+                // shows what is actually true rather than what was just asked for.
+                scope.launch {
+                    delay(SERVICE_START_GRACE_MILLIS)
+                    refresh()
+                }
             }
         } else {
+            startRequestedAt = 0L
             WatchService.stop(app)
         }
         refresh()

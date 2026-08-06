@@ -608,12 +608,17 @@ private fun WorkingDialog(message: String) {
 
 @Composable
 private fun ReportDialog(outcomes: List<MoveOutcome>, onDismiss: () -> Unit) {
-    val moved = outcomes.count { it is MoveOutcome.Moved }
+    // A copy that could not be followed by a delete still arrived, so counting
+    // it as "nothing moved" would contradict the line underneath it.
+    val copied = outcomes.count {
+        it is MoveOutcome.Moved || it is MoveOutcome.OriginalRemains
+    }
     val title = when {
-        outcomes.size == 1 && moved == 1 -> "Filed"
-        moved == outcomes.size -> "All $moved filed"
-        moved == 0 -> if (outcomes.size == 1) "Not moved" else "Nothing moved"
-        else -> "$moved of ${outcomes.size} moved"
+        copied == 0 -> if (outcomes.size == 1) "Not moved" else "Nothing moved"
+        copied < outcomes.size -> "$copied of ${outcomes.size} filed"
+        outcomes.any { it is MoveOutcome.OriginalRemains } -> "Copied, originals still there"
+        outcomes.size == 1 -> "Filed"
+        else -> "All $copied filed"
     }
 
     AlertDialog(
@@ -657,9 +662,9 @@ private fun explain(outcome: MoveOutcome): String = when (outcome) {
     }
 
     is MoveOutcome.OriginalRemains ->
-        "Copied to ${outcome.destination} and checked, but the original at " +
-            "${outcome.originalPath} could not be deleted (${outcome.reason}). " +
-            "There are two copies now — delete the one you do not want."
+        "Copied to ${outcome.destination} as \"${outcome.savedAs}\" and checked, but the " +
+            "original at ${outcome.originalPath} could not be deleted (${outcome.reason}). " +
+            "Both copies are there — delete whichever you do not want."
 
     is MoveOutcome.Failed -> "Not moved. ${outcome.reason}"
 
