@@ -88,14 +88,20 @@ object Formatting {
         "img" to "Disc image",
     )
 
+    /** What a provider is told when nothing better is known. */
+    const val UNKNOWN_MIME = "application/octet-stream"
+
     /**
      * A content type for the destination provider. Getting this right matters:
      * some providers append an extension of their own when the type and the
      * name disagree.
+     *
+     * Returns [UNKNOWN_MIME] for anything not in the table, which is the
+     * caller's cue to ask Android before giving up.
      */
     fun mimeType(name: String): String {
         val extension = Naming.extension(name).removePrefix(".").lowercase()
-        return MIME_TYPES[extension] ?: "application/octet-stream"
+        return MIME_TYPES[extension] ?: UNKNOWN_MIME
     }
 
     private val MIME_TYPES = mapOf(

@@ -4,7 +4,9 @@ import android.content.Context
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
+import android.webkit.MimeTypeMap
 import com.magpie.filer.core.Formatting
+import com.magpie.filer.core.Naming
 import com.magpie.filer.watch.SpottedFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -84,7 +86,7 @@ class Mover(private val context: Context) {
             DocumentsContract.createDocument(
                 resolver,
                 folder,
-                Formatting.mimeType(targetName),
+                mimeFor(targetName),
                 targetName,
             )
         }.getOrElse {
@@ -176,6 +178,21 @@ class Mover(private val context: Context) {
         }
 
         return MoveOutcome.Moved(name, savedAs, destination, notes)
+    }
+
+    /**
+     * The content type to create the document with. The built-in table covers
+     * the common cases; anything else goes to Android's own list before falling
+     * back, because a provider handed application/octet-stream may decide to
+     * append an extension of its own and quietly rename the file.
+     */
+    private fun mimeFor(name: String): String {
+        val known = Formatting.mimeType(name)
+        if (known != Formatting.UNKNOWN_MIME) return known
+        val extension = Naming.extension(name).removePrefix(".").lowercase()
+        if (extension.isEmpty()) return Formatting.UNKNOWN_MIME
+        return MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+            ?: Formatting.UNKNOWN_MIME
     }
 
     // ---- copying -----------------------------------------------------------
