@@ -26,6 +26,20 @@ jobs:
       - name: Run unit tests
         run: ./gradlew testDebugUnitTest
 
+      # Surfaces what the installer cares about: signing certificate, package
+      # name, SDK levels, and the testOnly flag that silently blocks sideloads.
+      - name: Inspect debug APK
+        run: |
+          APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)
+          echo "=== apk: $APK ($(stat -c%s "$APK") bytes) ==="
+          "${BT}apksigner" verify --print-certs -v "$APK" || true
+          echo "=== badging ==="
+          "${BT}aapt2" dump badging "$APK" | head -15 || true
+          echo "=== manifest flags ==="
+          "${BT}aapt2" dump xmltree "$APK" --file AndroidManifest.xml \
+            | grep -iE "testOnly|debuggable|package=|SdkVersion" || true
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:

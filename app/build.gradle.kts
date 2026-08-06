@@ -8,6 +8,21 @@ android {
     namespace = "com.wombat.split"
     compileSdk = 36
 
+    // A checked-in debug key so every build — local or CI — is signed
+    // identically and new APKs install over old ones instead of being
+    // rejected. Without this, Gradle mints a random debug key per machine
+    // (and per ephemeral CI runner), so each build refuses to update the
+    // last. Debug keystore passwords are the public Android constants;
+    // this key signs nothing that is distributed as trusted.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = rootProject.file("keystore/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     defaultConfig {
         applicationId = "com.wombat.split"
         minSdk = 26
