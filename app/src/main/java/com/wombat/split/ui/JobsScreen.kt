@@ -229,7 +229,7 @@ private fun JobCard(job: SplitJob, onCancel: () -> Unit) {
 private fun NewJobDialog(
     onDismiss: () -> Unit,
     onStart: (
-        source: Uri,
+        sources: List<SourceSelection>,
         destination: Uri,
         limitBytes: Long,
         zipParts: Boolean,
