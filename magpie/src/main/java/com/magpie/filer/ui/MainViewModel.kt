@@ -304,22 +304,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun confirmRename(newName: String) {
         val renaming = _step.value as? FilingStep.Rename ?: return
-        val stripped = Naming.sanitise(newName)
-        if (stripped.isBlank()) {
-            // Everything typed was a character no folder accepts. Appending the
-            // extension anyway would file the only copy as a hidden dotfile.
+        val candidate = Naming.withExtensionOf(
+            Naming.sanitise(newName),
+            renaming.file.name,
+        )
+        if (!Naming.isUsable(candidate)) {
+            // Nothing usable was left once the illegal characters went. Filing
+            // it anyway would put the only copy somewhere invisible.
             store.report(
-                "\"$newName\" is made only of characters a folder will not accept, so " +
-                    "there would be no name left. Nothing was moved — try another name."
+                "\"$newName\" leaves nothing to name the file with, so it would end up " +
+                    "hidden. Nothing was moved — try another name."
             )
             _step.value = FilingStep.Idle
             return
         }
-        startMoves(
-            listOf(renaming.file),
-            renaming.tree,
-            rename = Naming.withExtensionOf(stripped, renaming.file.name),
-        )
+        startMoves(listOf(renaming.file), renaming.tree, rename = candidate)
     }
 
     fun cancelFiling() {

@@ -516,9 +516,8 @@ private fun RenameDialog(
     // What the file will actually be called: characters no folder accepts are
     // stripped, and the extension is put back if the edit lost it. Showing it
     // means the rename step never surprises anyone.
-    val stripped = Naming.sanitise(name)
-    val finalName = Naming.withExtensionOf(stripped, step.file.name)
-    val usable = stripped.isNotBlank()
+    val finalName = Naming.withExtensionOf(Naming.sanitise(name), step.file.name)
+    val usable = Naming.isUsable(finalName)
 
     AlertDialog(
         onDismissRequest = onCancel,
@@ -545,8 +544,8 @@ private fun RenameDialog(
                     text = if (usable) {
                         "Will be saved as \"$finalName\"."
                     } else {
-                        "That is made only of characters a folder will not accept, " +
-                            "so there would be no name left."
+                        "There would be no name left — only characters a folder will " +
+                            "not accept, or nothing before the extension."
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = if (usable) {

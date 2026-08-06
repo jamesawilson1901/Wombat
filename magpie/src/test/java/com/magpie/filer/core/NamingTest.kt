@@ -99,6 +99,18 @@ class NamingTest {
     }
 
     @Test
+    fun `a name has to have something in it that is not the extension`() {
+        assertTrue(Naming.isUsable("report.pdf"))
+        assertTrue(Naming.isUsable("no extension"))
+        assertFalse(Naming.isUsable(""))
+        assertFalse(Naming.isUsable("   "))
+        // Typing only illegal characters, or only an extension, would file the
+        // user's one copy as a hidden dotfile.
+        assertFalse(Naming.isUsable(".pdf"))
+        assertFalse(Naming.isUsable(Naming.withExtensionOf(Naming.sanitise("?"), "report.pdf")))
+    }
+
+    @Test
     fun `characters no filesystem accepts are removed`() {
         assertEquals("a b c.txt", Naming.sanitise("a/b:c.txt"))
         assertEquals("quotes and pipes", Naming.sanitise("\"quotes\" and |pipes|"))

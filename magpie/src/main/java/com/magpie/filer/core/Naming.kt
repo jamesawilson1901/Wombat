@@ -102,6 +102,17 @@ object Naming {
         return edited + wanted
     }
 
+    /**
+     * A name worth writing: something is left of it, and it is not a hidden
+     * dotfile. Typing "." or "?" in the rename box must not file the user's only
+     * copy somewhere they will never see it again.
+     */
+    fun isUsable(name: String): Boolean {
+        if (name.isBlank()) return false
+        if (name.startsWith(".")) return false
+        return stem(name).isNotBlank()
+    }
+
     /** Strip what no filesystem will accept, and trim to something sane. */
     fun sanitise(name: String): String {
         val stripped = name.map {

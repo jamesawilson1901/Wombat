@@ -210,21 +210,28 @@ class FileStore private constructor(private val prefs: SharedPreferences) {
      * Touches the disk; call it from a background thread.
      */
     fun pruneMissing() {
+        val waitingPaths = _waiting.value.map { it.path }
+        val ignoredPaths = _ignored.value.map { it.path }
+        val offeredPaths = synchronized(lock) { offered.toList() }
+
+        // Thousands of stat calls, done outside the lock on purpose: the main
+        // thread takes the same lock for every change to a list, and it must not
+        // be made to wait behind a scan of the disk.
+        val gone = (waitingPaths + ignoredPaths + offeredPaths).filterTo(HashSet(), ::deleted)
+        if (gone.isEmpty()) return
+
         synchronized(lock) {
-            val liveWaiting = _waiting.value.filterNot { deleted(it.path) }
+            val liveWaiting = _waiting.value.filterNot { it.path in gone }
             if (liveWaiting.size != _waiting.value.size) {
                 _waiting.value = liveWaiting
                 writeFiles(KEY_WAITING, liveWaiting)
             }
-            val liveIgnored = _ignored.value.filterNot { deleted(it.path) }
+            val liveIgnored = _ignored.value.filterNot { it.path in gone }
             if (liveIgnored.size != _ignored.value.size) {
                 _ignored.value = liveIgnored
                 writeFiles(KEY_IGNORED, liveIgnored)
             }
-            val liveOffered = offered.filterNotTo(LinkedHashSet()) { deleted(it) }
-            if (liveOffered.size != offered.size) {
-                offered.clear()
-                offered.addAll(liveOffered)
+            if (offered.removeAll(gone)) {
                 writeStrings(KEY_OFFERED, offered)
             }
         }
