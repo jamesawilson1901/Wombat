@@ -187,7 +187,9 @@ class WatchService : Service() {
             observers.remove(gone)?.stopWatching()
         }
         for ((path, root) in wanted) {
-            if (path in observers) continue
+            // containsKey spelled out: on a ConcurrentHashMap, "in" would mean
+            // containsValue, which Kotlin refuses to guess at.
+            if (observers.containsKey(path)) continue
             val observer = object : FileObserver(root.directory, OBSERVER_MASK) {
                 override fun onEvent(event: Int, path: String?) {
                     // Deliberately does no work: events arrive while a file is

@@ -162,6 +162,12 @@ The specific things worth watching for, because they are the least certain:
   unchanged, and behaves as a rename if the name is different.
 - If the destination provider does not report a size back, verification falls
   back to the byte count Magpie wrote, and the outcome says so.
+- **Files on a card that has been taken out stay on the lists.** Magpie will not
+  drop an entry unless it can read the folder it lived in and see that the file
+  has gone, because guessing the other way would empty your lists every time a
+  card was unplugged.
+- **Already in your folders** lists the top level of each watched folder, newest
+  first, up to sixty entries. It is a way to reach a file, not a file manager.
 
 ## Building
 
