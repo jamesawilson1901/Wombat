@@ -1,5 +1,22 @@
 # Wombat
 
+Two unrelated Android apps live in this repo, as separate Gradle modules:
+
+| Module | App | What it does |
+| --- | --- | --- |
+| `:app` | **Wombat** | Splits a large folder or file into parts under a size limit. Documented below. |
+| `:magpie` | **Magpie** | Watches your download folders and offers to file each new arrival. See [`magpie/README.md`](magpie/README.md). |
+
+Magpie needs two things set up on first install or it will quietly stop working:
+all-files access, and ColorOS battery whitelisting (Settings → Battery → App
+battery usage → Magpie → Allow background activity, Optimise battery use off,
+and lock it in recent apps). The full instructions and the honest list of its
+limits are in [`magpie/README.md`](magpie/README.md).
+
+---
+
+## Wombat
+
 Android app that splits a large folder (or a single file) into parts that
 each stay under a storage limit (e.g. 25 MB). Package: `com.wombat.split`.
 
