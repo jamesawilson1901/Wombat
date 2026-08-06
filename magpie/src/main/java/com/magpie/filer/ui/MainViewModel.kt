@@ -177,7 +177,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onFolderChosen(uri: Uri?) {
-        val pending = _step.value as? FilingStep.ChooseFolder ?: return
+        val pending = _step.value as? FilingStep.ChooseFolder
+        if (pending == null) {
+            // Android can kill the app while the folder picker is in front. The
+            // picker still returns a folder, but which file it was for is gone.
+            // Say so rather than appearing to do nothing.
+            if (uri != null) {
+                store.report(
+                    "Magpie lost track of which file that folder was for — Android closed " +
+                        "the app while the picker was open. Nothing was moved. Tap the file " +
+                        "in the list below to try again."
+                )
+            }
+            return
+        }
         if (uri == null) {
             _step.value = FilingStep.Idle
             return

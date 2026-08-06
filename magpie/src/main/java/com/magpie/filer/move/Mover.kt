@@ -130,13 +130,19 @@ class Mover(private val context: Context) {
             )
         }
 
-        when (val reported = reportedSize(created)) {
-            null -> notes += "$destination did not report the file size back, so the check " +
-                "used the ${copied.written} bytes Magpie wrote."
+        val sizeLookup = attempt { column(created, DocumentsContract.Document.COLUMN_SIZE) }
+        val reported = sizeLookup.getOrNull()?.toLongOrNull()
+        when {
+            sizeLookup.isFailure -> notes +=
+                "$destination would not say how big the copy is " +
+                    "(${reason(sizeLookup.exceptionOrNull())}), so the check used the " +
+                    "${copied.written} bytes Magpie wrote."
 
-            expected -> Unit
+            reported == null -> notes +=
+                "$destination did not report a size back, so the check used the " +
+                    "${copied.written} bytes Magpie wrote."
 
-            else -> return MoveOutcome.Failed(
+            reported != expected -> return MoveOutcome.Failed(
                 name,
                 "$destination says the copy is $reported bytes, but the original is " +
                     "$expected bytes. Your original is untouched." +
@@ -144,7 +150,12 @@ class Mover(private val context: Context) {
             )
         }
 
-        val savedAs = reportedName(created) ?: targetName
+        val nameLookup = attempt { column(created, DocumentsContract.Document.COLUMN_DISPLAY_NAME) }
+        if (nameLookup.isFailure) {
+            notes += "$destination would not say what it named the file " +
+                "(${reason(nameLookup.exceptionOrNull())}). Magpie asked for \"$targetName\"."
+        }
+        val savedAs = nameLookup.getOrNull() ?: targetName
         if (savedAs != targetName) {
             notes += "Saved as \"$savedAs\" — something called \"$targetName\" was already there."
         }
@@ -228,29 +239,16 @@ class Mover(private val context: Context) {
 
     // ---- reading the destination back --------------------------------------
 
-    private fun reportedSize(document: Uri): Long? = attempt {
-        context.contentResolver.query(
-            document,
-            arrayOf(DocumentsContract.Document.COLUMN_SIZE),
-            null,
-            null,
-            null,
-        )?.use { cursor ->
-            if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else null
-        }
-    }.getOrNull()
-
-    private fun reportedName(document: Uri): String? = attempt {
-        context.contentResolver.query(
-            document,
-            arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
-            null,
-            null,
-            null,
-        )?.use { cursor ->
-            if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getString(0) else null
-        }
-    }.getOrNull()
+    /**
+     * Read one column of the created document back. Returns null when the
+     * provider has nothing to say; throws when the query itself fails, so the
+     * caller can tell the difference and say which happened.
+     */
+    private fun column(document: Uri, name: String): String? =
+        context.contentResolver.query(document, arrayOf(name), null, null, null)
+            ?.use { cursor ->
+                if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getString(0) else null
+            }
 
     /**
      * True when the chosen folder is the one the file is already in.
