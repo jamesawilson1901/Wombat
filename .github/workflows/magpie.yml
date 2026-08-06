@@ -1,0 +1,45 @@
+name: Magpie
+
+on:
+  push:
+    branches: [main, 'claude/**']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # Gradle is installed by the action rather than run from a wrapper jar:
+      # Magpie is developed from a phone, and a binary jar cannot be committed
+      # from one.
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.14.3
+
+      - name: Build debug APK
+        run: gradle :magpie:assembleDebug
+
+      - name: Run unit tests
+        run: gradle :magpie:testDebugUnitTest
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: magpie-debug-apk
+          path: magpie/build/outputs/apk/debug/*.apk
+
+      - name: Upload test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: magpie-test-report
+          path: magpie/build/reports/tests/

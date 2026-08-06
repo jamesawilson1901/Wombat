@@ -21,3 +21,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "wombat"
 include(":app")
+include(":magpie")

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Window-level theme only. All real theming lives in Compose
+         (MagpieTheme) — fixed silver-grey palette, no Material You. -->
+    <style name="Theme.Magpie" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/magpie_window_background_light</item>
+    </style>
+</resources>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Window backgrounds, shown for the instant before Compose draws.
+         They match MagpieTheme's background so there is no flash. -->
+    <color name="magpie_window_background_light">#F7F8FA</color>
+    <color name="magpie_window_background_dark">#12141A</color>
+</resources>

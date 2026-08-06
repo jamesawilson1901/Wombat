@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Magpie</string>
+    <string name="brand_tile_description">Magpie</string>
+
+    <string name="channel_files_name">New files</string>
+    <string name="channel_files_description">One notification per file that has just finished arriving.</string>
+    <string name="channel_service_name">Watching</string>
+    <string name="channel_service_description">A quiet, permanent notice shown while Magpie is watching your download folders.</string>
+</resources>
