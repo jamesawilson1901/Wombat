@@ -28,7 +28,9 @@ class PopupSession(files: List<File>) {
     data class Entry(val path: String, val name: String, val size: Long)
 
     val entries: List<Entry> = files.map { Entry(it.absolutePath, it.name, it.length()) }
-    val ticked = mutableStateMapOf<String, Boolean>().apply { entries.forEach { put(it.path, true) } }
+    val ticked = mutableStateMapOf<String, Boolean>().also { map ->
+        entries.forEach { map[it.path] = true }
+    }
 
     /** folder paths to offer; second = whether the AI produced them */
     val suggestions = mutableStateOf<List<String>>(emptyList())
