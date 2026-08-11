@@ -103,9 +103,16 @@ fun SetupScreen(onDone: () -> Unit) {
             enabled = true,
             actionLabel = "Grant file access",
         ) {
-            context.startActivity(
-                Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
-                    .setData(Uri.parse("package:${context.packageName}"))
+            // The per-app action takes a package URI; the general one takes
+            // none. ColorOS rejects mismatched forms, hence the chain.
+            launchFirst(
+                context,
+                Intent(
+                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                    Uri.parse("package:${context.packageName}"),
+                ),
+                Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION),
+                appDetailsIntent(context),
             )
         }
 
@@ -117,8 +124,11 @@ fun SetupScreen(onDone: () -> Unit) {
             enabled = hasStorage,
             actionLabel = "Allow overlay",
         ) {
-            context.startActivity(
-                Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))
+            launchFirst(
+                context,
+                Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}")),
+                Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION),
+                appDetailsIntent(context),
             )
         }
 
@@ -143,9 +153,12 @@ fun SetupScreen(onDone: () -> Unit) {
             enabled = hasStorage && hasOverlay && hasNotifications,
             actionLabel = "Exempt from battery optimisation",
         ) {
-            context.startActivity(
+            launchFirst(
+                context,
                 Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
-                    .setData(Uri.parse("package:${context.packageName}"))
+                    .setData(Uri.parse("package:${context.packageName}")),
+                Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
+                appDetailsIntent(context),
             )
         }
 
@@ -164,11 +177,7 @@ fun SetupScreen(onDone: () -> Unit) {
                 )
                 Spacer(Modifier.height(10.dp))
                 OutlinedButton(
-                    onClick = {
-                        context.startActivity(
-                            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))
-                        )
-                    },
+                    onClick = { launchFirst(context, appDetailsIntent(context)) },
                     enabled = hasStorage && hasOverlay && hasNotifications && hasBattery,
                 ) { Text("Open app settings") }
                 Spacer(Modifier.height(6.dp))
@@ -187,6 +196,21 @@ fun SetupScreen(onDone: () -> Unit) {
         ) { Text("Finish setup") }
     }
 }
+
+/** Try each intent in order; never let a missing settings activity crash the wizard. */
+private fun launchFirst(context: Context, vararg intents: Intent) {
+    for (intent in intents) {
+        try {
+            context.startActivity(intent)
+            return
+        } catch (_: Exception) {
+            // Some ColorOS builds don't resolve stock settings actions; fall through.
+        }
+    }
+}
+
+private fun appDetailsIntent(context: Context): Intent =
+    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))
 
 @Composable
 private fun StepCard(
