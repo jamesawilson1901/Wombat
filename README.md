@@ -1,89 +1,80 @@
-# Wombat
+# Magpie
 
-Android app that splits a large folder (or a single file) into parts that
-each stay under a storage limit (e.g. 25 MB). Package: `com.wombat.split`.
+Android app that files your downloads. When a file finishes downloading,
+Magpie pops up over whatever app is on screen with three suggested
+destination folders — chosen instantly by local rules, upgraded in place by
+the Claude API when a key is set. Tap one and the file moves there. Stray
+screenshots are swept silently into the main Screenshots folder.
+
+Single user, sideloaded (Oppo A5 Pro 5G / ColorOS 16), never Play Store.
+Package: `com.magpie`.
 
 ## How it works
 
-1. Queue up what you want split: **Add folder** picks one folder at a time
-   (the Storage Access Framework has no multi-folder picker), **Add files**
-   multi-selects any number of files in one trip. Then choose a destination
-   folder, a part size limit in MB (default 25), and whether to zip each
-   part (default on). No storage permission is needed for any of it.
-   Each source becomes its own job with its own name from the animal pool,
-   and the foreground service runs them one after another.
-2. Wombat packs whole files into parts with first-fit-decreasing bin
-   packing (`split/SplitPlanner.kt` — pure logic, unit-tested), keeping
-   every part under the limit and preserving each file's relative path.
-   Files bigger than the limit are byte-chunked into `.001`/`.002` slices,
-   one slice per part; reassemble with `cat name.* > name` (chunks stay
-   raw even in zip mode — a zip of a partial slice would add nothing).
-3. Parts are **copied** (the source is never modified) into the
-   destination, named after the job: `echidna_01.zip`, `echidna_02.zip`, …
-   (or folders `echidna_01/`, … with zip off). Jobs auto-name from the
-   animal pool.
-4. Jobs run in a foreground service with a progress notification and a
-   working Cancel action, so they survive the app going to the background.
-   With several queued, the notification also shows "Job 2 of 5"; cancelling
-   one job leaves the rest of the queue running.
-   Job history is persisted and survives app restarts; jobs interrupted by
-   process death reload as failed.
+1. **Detection** — a foreground service (`service/WatcherService.kt`) watches
+   `Download`, both `Screenshots` folders, and SD-card equivalents with
+   `FileObserver`, firing on `CLOSE_WRITE`/`MOVED_TO` only. In-progress
+   markers (`.crdownload`, `.part`, …), dotfiles, and zero-byte files are
+   ignored, and a file counts as complete only after two size reads 500 ms
+   apart agree.
+2. **Grouping** — files completing within the debounce window (default 10 s,
+   capped at 60 s total) share one popup (`domain/GroupDebouncer.kt`).
+3. **Popup** — a `TYPE_APPLICATION_OVERLAY` window hosting a `ComposeView`.
+   `overlay/OverlayLifecycleOwner.kt` provides the three view-tree owners a
+   raw overlay ComposeView needs, or it renders nothing. The popup opens
+   immediately with local suggestions (`domain/LocalSuggester.kt` — learned
+   decisions, then extension matches, then preset recency/frequency); the
+   Claude call runs in parallel with a 3 s timeout and swaps the buttons in
+   place if it lands. No key / no network / cap reached / any error → local
+   suggestions simply stay. If the overlay can't be shown (ColorOS
+   suppresses it during calls), a heads-up notification with the three
+   folders as action buttons takes over.
+4. **Safety** — every path (including every path the model returns) passes
+   `domain/PathGuard.kt`: nothing outside the storage roots, nothing hidden,
+   nothing under `Android/`, destinations only from the preset list. Moves
+   are copy → verify (length + SHA-256 under 50 MB) → rename → delete
+   (`domain/SafeMover.kt`); name clashes get ` (2)`, ` (3)`…, failures are
+   loud and leave the original untouched. Every move is logged with undo.
+5. **API** — one raw Messages-API call per popup group
+   (`api/ClaudeClient.kt`, OkHttp + kotlinx.serialization; model default
+   `claude-haiku-4-5-20251001`, editable). Costs are computed from the
+   `usage` block at editable per-MTok rates; a monthly spend cap (default
+   $2.00) is a hard stop, after which everything runs on local rules with a
+   banner on the home screen. The key is Tink-encrypted (AEAD keyset wrapped
+   by an Android Keystore master key — deliberately *not* the deprecated
+   `EncryptedSharedPreferences`), ciphertext in DataStore, never logged.
 
-CI (`.github/workflows/build.yml`) builds the debug APK on every push to
-main and uploads it as the `app-debug-apk` artifact.
-
-## Brand
-
-The launcher icon sets the brand: **silver line-art wombat on near-black**
-(`#16161D` tile, `#CCCCCE` line — both sampled from the source artwork).
-Everything in the UI follows from it.
-
-- **Dark-first fixed theme.** `WombatTheme` (Compose Material 3) uses a fixed
-  palette — near-black surfaces, silver/light-grey accents — with **no
-  Material You / dynamic colour**, so the app matches its icon on every
-  device. A light theme is included with the same silver-on-neutral
-  character; the app follows the system dark/light setting.
-- Palette lives in `app/src/main/java/com/wombat/split/ui/theme/Color.kt`.
-
-## Launcher icon
-
-Adaptive icon, fully vector — no density PNGs needed (minSdk 26 means every
-device uses the adaptive icon):
-
-| Layer | File | Notes |
-| --- | --- | --- |
-| Foreground | `res/drawable/ic_launcher_foreground.xml` | Wombat outline only, transparent bg, scaled inside the 66dp safe zone |
-| Background | `@color/ic_launcher_background` | Flat `#16161D` — no baked corners or shadows; the launcher masks and elevates |
-| Monochrome | `res/drawable/ic_launcher_monochrome.xml` | Themed icons on Android 13+ |
-
-Source artwork:
-
-- `design/icon-source.png` — the original rendered artwork (silver wombat on
-  a near-black rounded tile). This is the source of truth.
-- `design/icon-source.svg` — vector master, hand-traced from the artwork
-  (108×108 adaptive-icon canvas); the drawables derive from it.
-- `design/icon-preview.png` — 1024px render of the vector trace.
-- `art/ic_launcher-playstore.png` — 512px flat square for the Play listing.
-
-To regenerate the PNGs after editing the SVG: `scripts/render-icons.sh`
-(needs any Chromium/Chrome; set `CHROME=` to point at one).
-
-## Job auto-naming
-
-New jobs are auto-named from an animal pool (`JobNames`, in
-`app/src/main/java/com/wombat/split/jobs/JobNames.kt`). The pool starts at
-**echidna**; **wombat is deliberately excluded** — it's the app's name, not a
-job name. After a full lap the names wrap with a round suffix
-(`echidna-2`, …). Unit tests: `app/src/test/.../JobNamesTest.kt`.
+Everything works with no API key: detection, popup, local suggestions,
+moves, log, undo, screenshot sweep, backlog sort, and the preset wizard
+(minus AI descriptions).
 
 ## Building
-
-Standard Android Gradle build:
 
 ```
 ./gradlew :app:assembleDebug
 ./gradlew :app:testDebugUnitTest
 ```
 
-- minSdk 26, targetSdk/compileSdk 36, Kotlin 2.2, AGP 8.11, Compose BOM
-  2025.06.01 (see `gradle/libs.versions.toml`).
+minSdk 26, target/compileSdk 36, Kotlin 2.2, AGP 8.11, Compose BOM
+2025.06.01, Room + KSP, DataStore, Tink (see `gradle/libs.versions.toml`).
+
+CI (`.github/workflows/build.yml`) builds the debug APK on every push and
+uploads it as the `magpie-debug-apk` artifact — download it on the phone and
+sideload. The checked-in `keystore/debug.keystore` keeps the signature
+stable across CI runs so new builds install over old ones.
+
+## Deliberate deviations from the build prompt
+
+- The foreground service uses FGS type `specialUse` rather than `dataSync`:
+  Android 15+ forbids starting `dataSync` services from `BOOT_COMPLETED`,
+  and surviving reboot is an acceptance test. The `FOREGROUND_SERVICE_DATA_SYNC`
+  permission is still declared.
+- "Recursive where needed" watching is implemented as each watched folder
+  plus its immediate subfolders (covers `Download/<app>/` writers without
+  watching the whole tree).
+
+## Icon
+
+Placeholder teal line-art magpie on near-black
+(`res/drawable/ic_launcher_foreground.xml`) until the real artwork lands;
+adaptive + monochrome layers wired.

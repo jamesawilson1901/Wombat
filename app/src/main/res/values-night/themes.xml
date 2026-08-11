@@ -1,6 +1,6 @@
-<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Wombat" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@color/wombat_window_background_dark</item>
+    <style name="Theme.Magpie" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#0D1413</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
     </style>
 </resources>

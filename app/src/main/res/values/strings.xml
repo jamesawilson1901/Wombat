@@ -1,37 +1,3 @@
-<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Wombat</string>
-    <string name="new_job">New split</string>
-    <string name="empty_state">No split jobs yet.\nPick a big folder and a size limit to get started.</string>
-
-    <string name="new_job_title">New split job</string>
-    <string name="add_folder">Add folder</string>
-    <string name="add_files">Add files</string>
-    <string name="remove">Remove</string>
-    <string name="source_none">Nothing selected yet — add folders or files to queue</string>
-    <string name="queue_count">%1$d queued</string>
-    <string name="pick_destination">Choose destination folder</string>
-    <string name="limit_label">Part size limit (MB)</string>
-    <string name="zip_label">Zip each part</string>
-    <string name="start">Start</string>
-    <string name="cancel">Cancel</string>
-
-    <string name="status_queued">Queued</string>
-    <string name="status_scanning">Scanning folder…</string>
-    <string name="status_running">%1$s of %2$s copied</string>
-    <string name="status_done">%1$d parts · %2$d files · %3$s</string>
-    <string name="status_cancelled">Cancelled</string>
-    <string name="chunked_note">%1$d large file(s) were byte-chunked into .001/.002 parts</string>
-
-    <string name="notification_channel_name">Split jobs</string>
-    <string name="notif_running_title">Splitting %1$s…</string>
-    <string name="notif_queue_position">Job %1$d of %2$d</string>
-    <string name="notif_done_title">%1$s finished</string>
-    <string name="notif_done_text">%1$d parts created</string>
-    <string name="notif_cancelled_title">%1$s cancelled</string>
-    <string name="notif_failed_title">%1$s failed</string>
-    <string name="error_source_inaccessible">Source folder is not accessible</string>
-    <string name="error_destination_inaccessible">Destination folder is not accessible</string>
-    <string name="error_generic">Split failed</string>
-    <string name="error_interrupted">Interrupted — the app was closed mid-split</string>
+    <string name="app_name">Magpie</string>
 </resources>

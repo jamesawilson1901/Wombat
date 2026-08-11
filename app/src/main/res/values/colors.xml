@@ -1,11 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Launcher icon tile: flat near-black, sampled from design/icon-source.png
-         (median of the artwork tile, between its lit and shadowed bands).
-         The launcher applies its own mask and shadow — keep this flat. -->
-    <color name="ic_launcher_background">#16161D</color>
-
-    <!-- Window backgrounds shown before Compose draws its first frame. -->
-    <color name="wombat_window_background_light">#F5F5F7</color>
-    <color name="wombat_window_background_dark">#16161D</color>
+    <!-- Near-black icon tile sampled from the planned Magpie artwork. -->
+    <color name="ic_launcher_background">#0D1413</color>
 </resources>

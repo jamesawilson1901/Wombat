@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "wombat"
+rootProject.name = "magpie"
 include(":app")
