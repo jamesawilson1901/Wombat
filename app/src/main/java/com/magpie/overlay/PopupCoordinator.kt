@@ -135,7 +135,9 @@ class PopupCoordinator(private val context: Context) {
             ai.renames.forEach { (fileName, proposed) ->
                 val entry = session.entries.firstOrNull { it.name == fileName } ?: return@forEach
                 val ok = RenameHeuristics.acceptAiRename(fileName, proposed) ?: return@forEach
-                if (current?.session == session) session.renames.putIfAbsent(entry.path, ok)
+                if (current?.session == session && !session.renames.containsKey(entry.path)) {
+                    session.renames[entry.path] = ok
+                }
             }
         }
     }
