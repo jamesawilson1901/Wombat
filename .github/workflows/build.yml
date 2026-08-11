@@ -7,6 +7,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # rolling "latest" release with the raw APK attached
     steps:
       - uses: actions/checkout@v4
 
@@ -44,3 +46,17 @@ jobs:
         with:
           name: magpie-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+
+      # Login-free direct download for sideloading from the phone:
+      # https://github.com/jamesawilson1901/Wombat/releases/download/latest/magpie-debug.apk
+      - name: Publish rolling "latest" release
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk magpie-debug.apk
+          gh release delete latest --yes || true
+          git push --delete origin latest || true
+          gh release create latest magpie-debug.apk \
+            --title "Magpie latest build (${GITHUB_SHA::7})" \
+            --notes "Debug APK from ${GITHUB_REF_NAME} @ ${GITHUB_SHA::7}. Download magpie-debug.apk below and install." \
+            --target "$GITHUB_SHA"
+        env:
+          GH_TOKEN: ${{ github.token }}
