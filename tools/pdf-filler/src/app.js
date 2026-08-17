@@ -5,8 +5,8 @@
  * defines, then writes the answers back into a real PDF.
  *
  * pdf.js renders the pages and reports where every widget annotation sits;
- * pdf-lib writes the values. Both are vendored in ./vendor, so the page works
- * offline and straight off the filesystem.
+ * pdf-lib writes the values. build.mjs inlines both into one HTML file, so
+ * this runs offline with no external references of any kind.
  */
 
 const {
@@ -15,9 +15,6 @@ const {
   setLineWidth, setStrokingColor, setLineCap, LineCapStyle,
 } = PDFLib;
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
-
-const STANDARD_FONTS = 'vendor/standard_fonts/';
 const MIN_SCALE = 0.4;
 const MAX_SCALE = 3.0;
 
@@ -90,26 +87,6 @@ async function loadFile(file) {
   }
 }
 
-/*
- * Served over http(s), pdf.js parses in a background worker. Off the local
- * filesystem the browser refuses to start one, so the worker script is pulled
- * into the main thread instead and pdf.js runs it there.
- */
-let workerScript = null;
-function ensureWorker() {
-  if (location.protocol !== 'file:') return Promise.resolve();
-  if (!workerScript) {
-    workerScript = new Promise((resolve, reject) => {
-      const tag = document.createElement('script');
-      tag.src = pdfjsLib.GlobalWorkerOptions.workerSrc;
-      tag.onload = resolve;
-      tag.onerror = () => reject(new Error(`could not load ${tag.src}`));
-      document.head.append(tag);
-    });
-  }
-  return workerScript;
-}
-
 async function openBytes(buffer, name) {
   state.bytes = buffer.slice(0);   // pdf.js may detach the buffer it is given
   state.name = name || 'document.pdf';
@@ -118,10 +95,10 @@ async function openBytes(buffer, name) {
   state.fields = new Map();
   state.scale = 1;
 
-  await ensureWorker();
+  // The worker script is bundled into this page, so pdf.js finds it as
+  // globalThis.pdfjsWorker and parses here rather than in a background thread.
   state.doc = await pdfjsLib.getDocument({
     data: new Uint8Array(buffer),
-    standardFontDataUrl: STANDARD_FONTS,
     isEvalSupported: false,
   }).promise;
 

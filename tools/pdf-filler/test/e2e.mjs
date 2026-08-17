@@ -1,31 +1,25 @@
 /*
- * End-to-end test: drives index.html in a real browser, fills the fixture
- * form, saves, and checks the produced PDF.
+ * End-to-end test: builds pdf-filler.html, drives it in a real browser, fills
+ * the fixture form, saves, and checks the produced PDF.
  *
- *   node test/make-fixture.mjs
  *   node test/e2e.mjs
  *
  * Needs Playwright's chromium. Point PW_CHROMIUM at a browser binary if
  * Playwright cannot find one itself.
  */
-import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { dirname, extname, join, normalize } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 await import('./make-fixture.mjs');   // keep fixture.pdf in step with the maker
+await import('../build.mjs');         // and test what the build actually emits
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..');
 const require = createRequire(import.meta.url);
 const { PDFDocument, PDFName, decodePDFRawStream } = require(join(root, 'vendor', 'pdf-lib.min.js'));
-
-const TYPES = {
-  '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',
-  '.pdf': 'application/pdf', '.pfb': 'application/octet-stream',
-};
 
 let failures = 0;
 function check(name, ok, detail) {
@@ -37,21 +31,6 @@ function eq(name, actual, expected) {
 }
 function near(name, actual, expected, tol) {
   check(name, Math.abs(actual - expected) <= tol, `expected ~${expected} (±${tol}), got ${actual}`);
-}
-
-function serve() {
-  const server = createServer(async (req, res) => {
-    const rel = normalize(decodeURIComponent(req.url.split('?')[0])).replace(/^(\.\.[/\\])+/, '');
-    const file = join(root, rel === '/' ? 'index.html' : rel);
-    try {
-      const body = await readFile(file);
-      res.writeHead(200, { 'content-type': TYPES[extname(file)] || 'application/octet-stream' });
-      res.end(body);
-    } catch {
-      res.writeHead(404).end('not found');
-    }
-  });
-  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
 }
 
 /** Fill the fixture form in the page and return the saved bytes. */
@@ -93,8 +72,8 @@ function appearanceOps(pdf, field) {
   return Buffer.from(bytes).toString('latin1');
 }
 
-const server = await serve();
-const base = `http://127.0.0.1:${server.address().port}/index.html`;
+// Everything runs off file://, the way the single file is meant to be used.
+const base = `file://${join(root, 'pdf-filler.html')}`;
 const browser = await chromium.launch({
   executablePath: process.env.PW_CHROMIUM || '/opt/pw-browsers/chromium',
 });
@@ -102,9 +81,9 @@ const browser = await chromium.launch({
 try {
   const context = await browser.newContext({ acceptDownloads: true });
   const page = await context.newPage();
-  const logs = [];
+  const fetched = [];
   page.on('pageerror', (e) => check(`no page error (${e.message})`, false));
-  page.on('console', (m) => logs.push(m.text()));
+  page.on('request', (r) => { if (r.url() !== base) fetched.push(r.url()); });
   await page.goto(base);
 
   // ---- fields are discovered and snapped onto the real widget rectangles ----
@@ -113,8 +92,8 @@ try {
   await page.waitForFunction(() => document.querySelectorAll('.fld, .btnfld').length >= 7);
 
   eq('field count in toolbar', await page.textContent('#count'), '6 fields');
-  check('served pages parse in a background worker',
-    !logs.some((l) => /fake worker/i.test(l)), logs.join(' | '));
+  check('the page loads and renders without fetching anything',
+    fetched.length === 0, fetched.join(' | '));
   eq('multiline field is a textarea',
     await page.getAttribute('[title="applicant.notes"]', 'class'), 'fld');
   eq('multiline field tag',
@@ -162,7 +141,7 @@ try {
   // ---- the marks actually paint: rasterise the saved PDF and count ink ----
   const ink = await page.evaluate(async (b64) => {
     const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-    const doc = await pdfjsLib.getDocument({ data: bytes, standardFontDataUrl: 'vendor/standard_fonts/' }).promise;
+    const doc = await pdfjsLib.getDocument({ data: bytes }).promise;
     const pg = await doc.getPage(1);
     const viewport = pg.getViewport({ scale: 2 });
     const canvas = document.createElement('canvas');
@@ -194,16 +173,12 @@ try {
   const flat = await PDFDocument.load(await fillAndSave(page, { flatten: true }));
   eq('flattened output has no fields', flat.getForm().getFields().length, 0);
 
-  // ---- and it all works straight off the filesystem, with no server ----
-  const local = await context.newPage();
-  await local.goto(`file://${join(root, 'index.html')}`);
-  await local.setInputFiles('#file', join(here, 'fixture.pdf'));
-  await local.waitForSelector('.page canvas', { timeout: 20000 });
-  await local.waitForFunction(() => document.querySelectorAll('.fld, .btnfld').length >= 7);
-  eq('file:// finds the same fields', await local.textContent('#count'), '6 fields');
+  // ---- the file itself carries no external references ----
+  const source = await readFile(join(root, 'pdf-filler.html'), 'utf8');
+  const external = source.match(/<(?:script|link|img|iframe)\b[^>]*\b(?:src|href)\s*=\s*["']?(?!data:)[^"'>]+/gi);
+  check('no tag pulls in an external file', external === null, (external || []).join(' | '));
 } finally {
   await browser.close();
-  server.close();
 }
 
 console.log(failures ? `\n${failures} check(s) failed` : '\nall checks passed');

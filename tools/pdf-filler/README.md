@@ -1,21 +1,17 @@
 # PDF Filler
 
-A basic form filler. Open a PDF and editable boxes snap onto the form fields
-the document already defines — no dragging text around, no guessing at
-coordinates. Type into them, click the checkboxes, save a real filled PDF.
+**[`pdf-filler.html`](pdf-filler.html) — one file. Download it, double-click it, fill in a PDF.**
 
-Self-contained: one HTML page plus two vendored libraries. Nothing is
-uploaded, and no build step or install is needed.
+Editable boxes snap onto the form fields the document already defines — no
+dragging text around, no guessing at coordinates. Type into them, click the
+checkboxes, save a real filled PDF.
+
+Nothing is uploaded and nothing is fetched: the whole thing, both libraries
+included, is a single 2 MB HTML file that works offline and straight off the
+filesystem. Copy it to a USB stick, email it to yourself, keep it in Drive —
+it runs anywhere with a browser.
 
 ## Using it
-
-Open `index.html` in a browser and pick a PDF. That works straight off the
-filesystem; serving the folder is a little faster on big documents because the
-PDF is then parsed in a background worker:
-
-```
-python3 -m http.server -d tools/pdf-filler 8000   # then open localhost:8000
-```
 
 - **Text fields** — click and type. Tab, or Enter, moves to the next field;
   Shift+Enter goes back.
@@ -38,10 +34,19 @@ nothing to snap to; the page says so rather than pretending. There is no
 support for drawing text at arbitrary coordinates, XFA forms, or digital
 signatures.
 
-Two smaller limits worth knowing: comb fields (the ones with a box per
-character) are filled as ordinary text rather than spaced per cell, and saving
-regenerates field appearances in Helvetica, so a form using an unusual font
-will render its answers in Helvetica.
+Three smaller limits worth knowing:
+
+- Comb fields (the ones with a box per character) are filled as ordinary text
+  rather than spaced per cell.
+- Saving regenerates field appearances in Helvetica, so a form using an
+  unusual font will render its answers in Helvetica.
+- pdf.js's standard font pack is not bundled — it cannot be, without an
+  external directory to fetch from — so a PDF relying on non-embedded base-14
+  fonts is drawn with the browser's own substitutes. In practice this is
+  indistinguishable; it was checked against both test forms.
+
+Being one big file has a cost: parsing happens on the main thread, so a very
+large PDF will hold the UI for a moment while it opens.
 
 ## How it works
 
@@ -60,25 +65,34 @@ rather than something painted over it, and it survives flattening.
 One wrinkle worth naming, since it bites anything that mixes these two
 libraries: pdf.js reports a radio button's *appearance state* (often `0`, `1`,
 …) while pdf-lib selects by the name in the field's option list (`standard`,
-`life`). `radioOption()` in `app.js` lines the two up by position.
+`life`). `radioOption()` in `src/app.js` lines the two up by position.
 
-## Layout
+## Editing it
+
+`pdf-filler.html` is generated. Edit the sources and rebuild:
 
 ```
-index.html      markup and toolbar
-app.js          rendering, the snapped overlay, and saving
-styles.css
-vendor/         pdf.js 3.11.174 and pdf-lib 1.17.1, with their licences
-test/           fixture generator and the end-to-end test
+cd tools/pdf-filler
+node build.mjs        # src/ + vendor/ -> pdf-filler.html
+```
+
+```
+pdf-filler.html   the built, committed, self-contained page
+build.mjs         inlines everything into it
+src/page.html     markup and toolbar
+src/app.js        rendering, the snapped overlay, and saving
+src/styles.css
+vendor/           pdf.js 3.11.174 and pdf-lib 1.17.1, with their licences
+test/             fixture generator and the end-to-end test
 ```
 
 ## Tests
 
-`test/e2e.mjs` drives the real page in Chromium: it builds a fixture form,
+`test/e2e.mjs` builds the file and drives it from `file://` in Chromium: it
 checks the overlay lands on the field rectangles to within a pixel, cycles a
 checkbox, saves, and reads the values back out of the produced PDF — including
-rasterising it to confirm the tick and cross actually paint. It also checks the
-page still works from `file://`.
+rasterising it to confirm the tick and cross actually paint. It also asserts
+the page loads and renders without fetching a single external resource.
 
 ```
 cd tools/pdf-filler
