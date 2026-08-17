@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF Filler</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>%E2%9C%93</text></svg>">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="bar">
+  <div class="bar-group">
+    <strong class="brand">PDF Filler</strong>
+    <button id="open" class="btn primary">Open PDF…</button>
+    <input id="file" type="file" accept="application/pdf,.pdf" hidden>
+    <span id="docname" class="docname"></span>
+  </div>
+
+  <div class="bar-group" id="doc-tools" hidden>
+    <span class="count" id="count"></span>
+    <button id="prev" class="btn icon" title="Previous field (Shift+Enter)">&#8593;</button>
+    <button id="next" class="btn icon" title="Next field (Enter)">&#8595;</button>
+    <span class="sep"></span>
+    <button id="zoomout" class="btn icon" title="Zoom out">&minus;</button>
+    <span class="zoom" id="zoomlabel">100%</span>
+    <button id="zoomin" class="btn icon" title="Zoom in">+</button>
+    <span class="sep"></span>
+    <label class="check"><input type="checkbox" id="highlight" checked> Highlight fields</label>
+    <label class="check" title="Bake the answers in so the result is no longer an editable form"><input type="checkbox" id="flatten"> Flatten</label>
+    <button id="reset" class="btn">Reset</button>
+    <button id="save" class="btn primary">Save filled PDF</button>
+  </div>
+</header>
+
+<div id="status" class="status" role="status" aria-live="polite" hidden></div>
+
+<main id="viewer" class="viewer">
+  <div id="drop" class="drop">
+    <div class="drop-inner">
+      <h1>Drop a PDF here</h1>
+      <p>Or <button id="open2" class="linkbtn">choose a file</button>. Everything stays on this machine &mdash; nothing is uploaded.</p>
+      <ul class="hints">
+        <li>Editable boxes snap onto the form fields the PDF already defines.</li>
+        <li>Click a checkbox to cycle it: empty &rarr; <b>&#10003;</b> &rarr; <b>&#10007;</b> &rarr; empty. Both marks count as ticked; the glyph is only how it prints.</li>
+        <li>Scanned/flat PDFs have no fields to snap to, so there is nothing to fill.</li>
+      </ul>
+    </div>
+  </div>
+  <div id="pages" class="pages"></div>
+</main>
+
+<script src="vendor/pdf.min.js"></script>
+<script src="vendor/pdf-lib.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
