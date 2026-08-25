@@ -2,6 +2,8 @@ package com.magpie.filer.move
 
 import android.content.Context
 import android.net.Uri
+import android.os.Bundle
+import android.os.CancellationSignal
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.webkit.MimeTypeMap
@@ -31,6 +33,15 @@ class SafDocumentStore(
 
     private companion object {
         const val BUFFER_BYTES = 256 * 1024
+
+        /**
+         * Queries go through the Bundle-and-signal form of the API, not the
+         * older selection/sortOrder one. DocumentsProvider refuses that older
+         * shape outright — "Pre-Android-O query format not supported" — and
+         * nothing here needs a selection anyway.
+         */
+        val NO_ARGS: Bundle? = null
+        val NO_SIGNAL: CancellationSignal? = null
     }
 
     /** The destination folder itself, when a document id of null is given. */
@@ -53,7 +64,7 @@ class SafDocumentStore(
             DocumentsContract.Document.COLUMN_SIZE,
         )
         val found = ArrayList<DocEntry>()
-        context.contentResolver.query(uri, columns, null, null, null)?.use { cursor ->
+        context.contentResolver.query(uri, columns, NO_ARGS, NO_SIGNAL)?.use { cursor ->
             while (cursor.moveToNext()) {
                 val id = cursor.getString(0) ?: continue
                 val name = cursor.getString(1) ?: continue
@@ -68,24 +79,39 @@ class SafDocumentStore(
         return found
     }
 
-    override fun createFile(folder: String?, name: String, mime: String): String? {
-        val created = DocumentsContract.createDocument(
-            context.contentResolver,
-            uriFor(folder),
-            realMimeFor(name, mime),
-            name,
-        ) ?: return null
-        return DocumentsContract.getDocumentId(created)
-    }
+    override fun createFile(folder: String?, name: String, mime: String): String? =
+        idOfCreated(
+            DocumentsContract.createDocument(
+                context.contentResolver,
+                uriFor(folder),
+                realMimeFor(name, mime),
+                name,
+            )
+        )
 
-    override fun createFolder(folder: String?, name: String): String? {
-        val created = DocumentsContract.createDocument(
-            context.contentResolver,
-            uriFor(folder),
-            DocumentsContract.Document.MIME_TYPE_DIR,
-            name,
-        ) ?: return null
-        return DocumentsContract.getDocumentId(created)
+    override fun createFolder(folder: String?, name: String): String? =
+        idOfCreated(
+            DocumentsContract.createDocument(
+                context.contentResolver,
+                uriFor(folder),
+                DocumentsContract.Document.MIME_TYPE_DIR,
+                name,
+            )
+        )
+
+    /**
+     * The id of a document that was actually created, or null when it was not.
+     *
+     * A provider that refuses returns null from its own createDocument, but the
+     * platform builds a document URI out of that null without checking first —
+     * so what comes back is a perfectly well-formed URI whose document id is
+     * the literal string "null". Taking that at face value would mean writing a
+     * copy into a document that does not exist and only finding out later, so
+     * it is treated as the refusal it actually is.
+     */
+    private fun idOfCreated(created: Uri?): String? {
+        val id = created?.let { DocumentsContract.getDocumentId(it) }
+        return if (id.isNullOrBlank() || id == "null") null else id
     }
 
     override fun write(document: String, source: File): WriteReport {
@@ -139,7 +165,7 @@ class SafDocumentStore(
      */
     private fun column(document: String, name: String): String? =
         context.contentResolver
-            .query(uriFor(document), arrayOf(name), null, null, null)
+            .query(uriFor(document), arrayOf(name), NO_ARGS, NO_SIGNAL)
             ?.use { cursor ->
                 if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getString(0) else null
             }
