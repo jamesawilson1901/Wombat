@@ -16,10 +16,14 @@ import com.magpie.filer.ai.Rules
 import com.magpie.filer.ai.FilingSuggestion as Suggestion
 import com.magpie.filer.ai.SuggestionResult
 import com.magpie.filer.ai.Suggester
+import com.magpie.filer.core.FolderPlan
 import com.magpie.filer.core.Naming
+import com.magpie.filer.core.PlanResult
 import com.magpie.filer.core.Safety
 import com.magpie.filer.move.Destinations
+import com.magpie.filer.move.BuildReport
 import com.magpie.filer.move.Filed
+import com.magpie.filer.move.FolderBuilder
 import com.magpie.filer.move.SafDocumentStore
 import com.magpie.filer.move.MoveOutcome
 import com.magpie.filer.move.Mover
@@ -809,6 +813,72 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun removeWatchedFolder(path: String) = store.removeRoot(path)
+
+    // ---- building a folder tree --------------------------------------------
+
+    /** The tree text the user has typed or pasted, kept while they edit it. */
+    private val _treeText = MutableStateFlow("")
+    val treeText: StateFlow<String> = _treeText.asStateFlow()
+
+    /** What the text currently means, so the count can be shown before building. */
+    private val _treePlan = MutableStateFlow<PlanResult?>(null)
+    val treePlan: StateFlow<PlanResult?> = _treePlan.asStateFlow()
+
+    /** The result of the last build, shown until dismissed. */
+    private val _treeReport = MutableStateFlow<BuildReport?>(null)
+    val treeReport: StateFlow<BuildReport?> = _treeReport.asStateFlow()
+
+    /** Set when the folder picker should open to choose where to build. */
+    private val _buildingAt = MutableStateFlow(0L)
+    val buildingAt: StateFlow<Long> = _buildingAt.asStateFlow()
+
+    fun setTreeText(text: String) {
+        _treeText.value = text
+        _treePlan.value = if (text.isBlank()) null else FolderPlan.parse(text)
+    }
+
+    /** Ask where to build. Nothing is made until a folder comes back. */
+    fun chooseWhereToBuild() {
+        val plan = _treePlan.value
+        if (plan !is PlanResult.Ready) {
+            store.report(
+                (plan as? PlanResult.Rejected)?.reason
+                    ?: "Type or paste a folder tree first."
+            )
+            return
+        }
+        _buildingAt.value = nextToken++
+    }
+
+    fun onBuildFolderChosen(tree: Uri?) {
+        _buildingAt.value = 0L
+        if (tree == null) return
+        val plan = _treePlan.value as? PlanResult.Ready ?: return
+
+        val chosen = Destinations.folderPath(tree)
+        if (chosen != null) {
+            Safety.refuse(chosen.absolutePath, WatchRoots.volumePaths(app))?.let {
+                store.report("Magpie will not build there — $it.")
+                return
+            }
+        }
+
+        scope.launch {
+            _step.value = FilingStep.Working("Making ${plan.folders.size} folders…")
+            val report = withContext(Dispatchers.IO) {
+                FolderBuilder.build(
+                    plan = plan.folders,
+                    store = SafDocumentStore(app, tree, Destinations.label(app, tree)),
+                )
+            }
+            _step.value = FilingStep.Idle
+            _treeReport.value = report
+        }
+    }
+
+    fun dismissTreeReport() {
+        _treeReport.value = null
+    }
 
     // ---- opened from a notification ----------------------------------------
 

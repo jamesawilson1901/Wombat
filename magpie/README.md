@@ -159,6 +159,46 @@ one. A candidate that cannot be read is said so, not assumed either way.
 
 An existing `Duplicates` folder is reused, never duplicated itself.
 
+## Building a folder tree
+
+Paste an indented tree into **Build a folder tree**, choose where it goes, and
+Magpie makes it:
+
+```
+TRIAD_SHORT/
+  01_CHARACTER_MASTERS/
+  02_LOCATION_MASTERS/
+  03_PROP_MASTERS/
+  04_SHOT_STILLS/
+    S01_ARRIVAL/
+    S02_TOWN/
+    S03_OLD_PATH/
+  05_VIDEO_TESTS/
+  06_VIDEO_FINALS/
+  07_SOUND/
+  08_EDITS/
+```
+
+Nesting comes from the indenting, and a line further in than the one above it
+goes inside it. The width does not have to be consistent and tabs and spaces
+can be mixed, because pasted text usually is. Trailing slashes are optional,
+blank lines and `#` comments are skipped, and a line can carry its own slashes
+(`04_SHOT_STILLS/S01_ARRIVAL`) and nest just the same.
+
+**Only folders are ever made.** A folder that is already there is reused — not
+replaced, not emptied, and everything in it is left alone. So running the same
+tree twice makes nothing the second time, and building a tree over one you have
+already started only fills in what is missing. No file is touched at all.
+
+Before anything is made, the card shows every path it is about to create, so a
+mis-indented paste is obvious then rather than afterwards. The report says what
+was made, what was already there, and anything that failed with the reason.
+
+Names go through the same cleaning a typed name gets: a name that would climb
+out with `..`, or start with a dot, is refused outright, and illegal characters
+inside an otherwise sensible name are stripped. There is a cap of 300 folders
+and 10 levels, so a stray paste cannot run away.
+
 ## Safe to clear
 
 The fail-safe means Downloads never empties itself, and the only thing between

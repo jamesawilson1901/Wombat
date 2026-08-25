@@ -61,6 +61,8 @@ import com.magpie.filer.core.Formatting
 import com.magpie.filer.core.Naming
 import com.magpie.filer.ai.Rule
 import com.magpie.filer.ai.Rules
+import com.magpie.filer.core.PlanResult
+import com.magpie.filer.move.BuildReport
 import com.magpie.filer.move.Destinations
 import com.magpie.filer.move.Filed
 import com.magpie.filer.move.MoveOutcome
@@ -82,6 +84,10 @@ fun MagpieScreen(viewModel: MainViewModel) {
     val filed by viewModel.filed.collectAsState()
     val rules by viewModel.rules.collectAsState()
     val extraRoots by viewModel.extraRoots.collectAsState()
+    val treeText by viewModel.treeText.collectAsState()
+    val treePlan by viewModel.treePlan.collectAsState()
+    val treeReport by viewModel.treeReport.collectAsState()
+    val buildingAt by viewModel.buildingAt.collectAsState()
     val suggestionSettings by viewModel.suggestionSettings.collectAsState()
 
     val context = LocalContext.current
@@ -90,6 +96,7 @@ fun MagpieScreen(viewModel: MainViewModel) {
     var showFiled by rememberSaveable { mutableStateOf(false) }
     var showRules by rememberSaveable { mutableStateOf(false) }
     var showFolders by rememberSaveable { mutableStateOf(false) }
+    var showBuilder by rememberSaveable { mutableStateOf(false) }
 
     val folderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -102,6 +109,19 @@ fun MagpieScreen(viewModel: MainViewModel) {
     val watchFolderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { chosen -> viewModel.addWatchedFolder(chosen) }
+
+    val buildPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { chosen -> viewModel.onBuildFolderChosen(chosen) }
+
+    // Opens exactly once per request, the same rule the filing picker follows.
+    var launchedBuild by rememberSaveable { mutableStateOf(0L) }
+    LaunchedEffect(buildingAt) {
+        if (buildingAt != 0L && buildingAt != launchedBuild) {
+            launchedBuild = buildingAt
+            buildPicker.launch(viewModel.lastDestination)
+        }
+    }
 
     val askForNotifications = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -248,6 +268,24 @@ fun MagpieScreen(viewModel: MainViewModel) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                }
+            }
+
+            item {
+                SectionHeading(
+                    title = "BUILD A FOLDER TREE",
+                    action = if (showBuilder) "Hide" else "Show",
+                    onAction = { showBuilder = !showBuilder },
+                )
+            }
+            if (showBuilder) {
+                item {
+                    TreeBuilderCard(
+                        text = treeText,
+                        plan = treePlan,
+                        onTextChange = viewModel::setTreeText,
+                        onBuild = viewModel::chooseWhereToBuild,
+                    )
                 }
             }
 
@@ -411,6 +449,10 @@ fun MagpieScreen(viewModel: MainViewModel) {
                 }
             }
         }
+    }
+
+    treeReport?.let { report ->
+        BuildReportDialog(report, viewModel::dismissTreeReport)
     }
 
     when (val current = step) {
@@ -849,6 +891,126 @@ private fun RuleRow(rule: Rule, onRemove: () -> Unit) {
             TextButton(onClick = onRemove) { Text("Forget") }
         }
     }
+}
+
+@Composable
+private fun TreeBuilderCard(
+    text: String,
+    plan: PlanResult?,
+    onTextChange: (String) -> Unit,
+    onBuild: () -> Unit,
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+                text = "Paste a folder tree and Magpie will make it inside a folder you " +
+                    "choose. Indent to nest. Folders that already exist are left exactly " +
+                    "as they are, with everything in them — nothing is replaced or emptied.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            OutlinedTextField(
+                value = text,
+                onValueChange = onTextChange,
+                label = { Text("Folder tree") },
+                placeholder = { Text("PROJECT/\n  01_STILLS/\n    S01_ARRIVAL/") },
+                minLines = 6,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            when (plan) {
+                is PlanResult.Ready -> {
+                    Text(
+                        text = "${plan.folders.size} folders, deepest " +
+                            "${plan.folders.maxOf { it.depth }} levels down.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    // Showing the paths before anything is made is the whole
+                    // point: a mis-indented paste is obvious here and not after.
+                    SelectionContainer {
+                        Text(
+                            text = plan.folders.joinToString("\n") { it.path },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                is PlanResult.Rejected -> Text(
+                    text = plan.reason,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+
+                null -> Unit
+            }
+
+            Button(
+                onClick = onBuild,
+                enabled = plan is PlanResult.Ready,
+            ) { Text("Choose where and build") }
+        }
+    }
+}
+
+@Composable
+private fun BuildReportDialog(report: BuildReport, onDismiss: () -> Unit) {
+    val title = when {
+        report.total == 0 -> "Nothing to make"
+        !report.allWell && report.made.isEmpty() -> "Nothing was made"
+        !report.allWell -> "${report.made.size} of ${report.total} made"
+        report.made.isEmpty() -> "All of them were already there"
+        else -> "${report.made.size} folders made"
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (report.reused.isNotEmpty()) {
+                    Text(
+                        text = "${report.reused.size} were already there and were left as " +
+                            "they were, with everything in them.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (report.made.isNotEmpty()) {
+                    Text("Made", style = SectionLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    SelectionContainer {
+                        Text(
+                            text = report.made.joinToString("\n"),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+                if (report.failed.isNotEmpty()) {
+                    Text(
+                        "Not made",
+                        style = SectionLabel,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    for ((path, reason) in report.failed) {
+                        Text(
+                            text = "$path — $reason",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+    )
 }
 
 // ---- dialogs ---------------------------------------------------------------
