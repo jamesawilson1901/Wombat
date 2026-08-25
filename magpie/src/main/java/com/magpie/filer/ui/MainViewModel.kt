@@ -12,6 +12,7 @@ import com.magpie.filer.ai.LibraryFolder
 import com.magpie.filer.ai.LibraryFolders
 import com.magpie.filer.ai.LibraryListing
 import com.magpie.filer.ai.Rule
+import com.magpie.filer.ai.SettingsFile
 import com.magpie.filer.ai.Snapshots
 import com.magpie.filer.ai.Rules
 import com.magpie.filer.ai.FilingSuggestion as Suggestion
@@ -1134,6 +1135,101 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun dismissTreeReport() {
         _treeReport.value = null
+    }
+
+    // ---- settings as a file ------------------------------------------------
+
+    /**
+     * Write the portable settings to the file the user chose. Rules accrete
+     * real value, and losing them to a reinstall or a new phone would sting.
+     * The API key is never in the file, and neither is the library folder —
+     * its permission grant would not survive the journey.
+     */
+    fun writeSettingsTo(target: Uri?) {
+        if (target == null) return
+        scope.launch {
+            val text = SettingsFile.write(
+                SettingsFile.Portable(
+                    rules = store.rules.value,
+                    watchedFolders = store.extraRoots.value,
+                    groupGapMinutes = _groupGapMinutes.value,
+                )
+            )
+            val failure = withContext(Dispatchers.IO) {
+                try {
+                    app.contentResolver.openOutputStream(target, "wt")?.use { out ->
+                        out.write(text.toByteArray(Charsets.UTF_8))
+                        null
+                    } ?: "Android would not open the file for writing"
+                } catch (e: Exception) {
+                    e.message ?: e.javaClass.simpleName
+                }
+            }
+            store.report(
+                if (failure == null) {
+                    "Settings saved: ${store.rules.value.size} rules, " +
+                        "${store.extraRoots.value.size} added folders, and the run gap. " +
+                        "The API key is not in the file — it never is."
+                } else {
+                    "The settings could not be saved ($failure). Nothing was written."
+                }
+            )
+        }
+    }
+
+    /** Read a settings file back in, adding to what is here rather than replacing it. */
+    fun importSettingsFrom(source: Uri?) {
+        if (source == null) return
+        scope.launch {
+            val text = withContext(Dispatchers.IO) {
+                try {
+                    app.contentResolver.openInputStream(source)?.use { input ->
+                        // A settings file is a few kilobytes; a cap keeps a
+                        // mischosen video from being read whole into memory.
+                        String(input.readNBytes(1_000_000), Charsets.UTF_8)
+                    }
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            val portable = SettingsFile.read(text)
+            if (portable == null) {
+                store.report(
+                    "That is not a Magpie settings file, so nothing was imported and " +
+                        "nothing here was changed."
+                )
+                return@launch
+            }
+
+            portable.rules.forEach { store.addRule(it) }
+            var foldersAdded = 0
+            for (path in portable.watchedFolders) {
+                val directory = File(path)
+                // A path from another phone may simply not exist here; adding
+                // it anyway would be a watch on nothing.
+                if (directory.isDirectory &&
+                    Safety.refuse(path, WatchRoots.volumePaths(app)) == null
+                ) {
+                    store.addRoot(path)
+                    foldersAdded++
+                }
+            }
+            portable.groupGapMinutes?.let { setGroupGapMinutes(it) }
+
+            store.report(
+                buildString {
+                    append("Imported ").append(portable.rules.size).append(" rules")
+                    append(" and ").append(foldersAdded).append(" folders")
+                    val skipped = portable.watchedFolders.size - foldersAdded
+                    if (skipped > 0) {
+                        append(" ($skipped folder")
+                        if (skipped > 1) append("s")
+                        append(" in the file do not exist on this phone and were left out)")
+                    }
+                    append(". Existing settings were kept.")
+                }
+            )
+        }
     }
 
     // ---- opened from a notification ----------------------------------------

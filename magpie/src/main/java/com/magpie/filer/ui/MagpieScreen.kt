@@ -130,6 +130,14 @@ fun MagpieScreen(viewModel: MainViewModel) {
         ActivityResultContracts.OpenDocumentTree()
     ) { chosen -> viewModel.onBuildFolderChosen(chosen) }
 
+    val settingsSaver = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { chosen -> viewModel.writeSettingsTo(chosen) }
+
+    val settingsOpener = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { chosen -> viewModel.importSettingsFrom(chosen) }
+
     // Opens exactly once per request, the same rule the filing picker follows.
     var launchedBuild by rememberSaveable { mutableStateOf(0L) }
     LaunchedEffect(buildingAt) {
@@ -367,6 +375,32 @@ fun MagpieScreen(viewModel: MainViewModel) {
                             onSplit = { at -> viewModel.splitGroup(index, at) },
                             onDrop = { viewModel.dropGroup(index) },
                         )
+                    }
+                }
+            }
+
+            item {
+                SectionHeading(title = "BACKUP", action = null, onAction = {})
+            }
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Rules, added folders and the run gap, saved as a file you " +
+                            "keep — for a new phone, or in case of a reinstall. The API " +
+                            "key is never included. Importing adds to what is here; it " +
+                            "replaces nothing.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { settingsSaver.launch("magpie-settings.json") }) {
+                            Text("Save settings")
+                        }
+                        TextButton(onClick = {
+                            settingsOpener.launch(arrayOf("application/json", "text/plain", "*/*"))
+                        }) {
+                            Text("Import")
+                        }
                     }
                 }
             }
