@@ -261,8 +261,24 @@ def write(path, im, **kwargs):
 
 def main():
     im = Image.open(SOURCE).convert("RGB")
-    tile, thickness = find_tile(im)
-    radius = corner_radius(im, tile, thickness)
+
+    # The frame detector is tuned per artwork, and a new tile drawing does not
+    # have to fit the old tuning: measure the frame once and pass it in.
+    #   --tile x0,y0,x1,y1   --thickness N   --radius N
+    args = sys.argv[1:]
+
+    def arg(name, parse):
+        return parse(args[args.index(name) + 1]) if name in args else None
+
+    tile = arg("--tile", lambda v: tuple(int(n) for n in v.split(",")))
+    thickness = arg("--thickness", int)
+    radius = arg("--radius", int)
+    if tile is None or thickness is None:
+        found, found_thickness = find_tile(im)
+        tile = tile or found
+        thickness = thickness or found_thickness
+    if radius is None:
+        radius = corner_radius(im, tile, thickness)
     x0, y0, x1, y1 = tile
     interior = (x0 + thickness, y0 + thickness, x1 - thickness, y1 - thickness)
     print(f"tile {tile} frame {thickness}px corner r={radius}px")
