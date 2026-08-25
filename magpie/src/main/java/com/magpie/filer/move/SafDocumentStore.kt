@@ -149,6 +149,10 @@ class SafDocumentStore(
         return WriteReport(written, notes)
     }
 
+    override fun open(document: String): java.io.InputStream =
+        context.contentResolver.openInputStream(uriFor(document))
+            ?: throw IOException("the document would not open for reading")
+
     override fun size(document: String): Long? =
         column(document, DocumentsContract.Document.COLUMN_SIZE)?.toLongOrNull()
 

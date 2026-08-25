@@ -47,6 +47,15 @@ interface DocumentStore {
     /** Copy [source] into an already created document. */
     fun write(document: String, source: File): WriteReport
 
+    /**
+     * Read a document back, so its contents can be fingerprinted. Reading is
+     * the only thing this is for; there is still no way to change or remove
+     * anything that is already there.
+     *
+     * @throws java.io.IOException when it cannot be opened.
+     */
+    fun open(document: String): java.io.InputStream
+
     /** The size the folder reports back. Null when it will not say. */
     fun size(document: String): Long?
 

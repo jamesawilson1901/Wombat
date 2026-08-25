@@ -153,27 +153,103 @@ class FilingTest {
     }
 
     @Test
-    fun `a duplicate of the same size is called out as probably identical`() {
+    fun `a duplicate with the same contents is known to be identical, not guessed`() {
         File(destination, "same.pdf").writeText("12345")
         val original = source("same.pdf", "12345")
 
         val outcome = file(original) as MoveOutcome.Duplicated
 
-        assertTrue(outcome.looksIdentical)
-        assertEquals(5L, outcome.existingSize)
+        assertEquals(true, outcome.identical)
+        assertEquals("same.pdf", outcome.sameContentAs)
         assertEquals(5L, outcome.incomingSize)
     }
 
     @Test
-    fun `a duplicate of a different size is not called identical`() {
+    fun `a name clash whose contents differ is not called identical`() {
         File(destination, "differs.pdf").writeText("12345")
         val original = source("differs.pdf", "1234567890")
 
         val outcome = file(original) as MoveOutcome.Duplicated
 
-        assertFalse(outcome.looksIdentical)
+        assertEquals(false, outcome.identical)
+        assertEquals(null, outcome.sameContentAs)
         assertEquals(5L, outcome.existingSize)
         assertEquals(10L, outcome.incomingSize)
+    }
+
+    @Test
+    fun `same size but different contents under the same name is not identical`() {
+        // The old size-only check called this a probable duplicate. It is not.
+        File(destination, "sneaky.pdf").writeText("aaaaa")
+        val original = source("sneaky.pdf", "bbbbb")
+
+        val outcome = file(original) as MoveOutcome.Duplicated
+
+        assertEquals(null, outcome.sameContentAs)
+        assertFalse("same size must not be mistaken for same file", outcome.identical == true)
+    }
+
+    // ---- the duplicate a name would never have caught ----------------------
+
+    @Test
+    fun `the same file under a different name is caught and kept apart`() {
+        File(destination, "already-filed.pdf").writeText("the very same bytes")
+        val original = source("brand-new-name.pdf", "the very same bytes")
+
+        val outcome = file(original)
+
+        assertTrue(outcome.toString(), outcome is MoveOutcome.Duplicated)
+        val duplicated = outcome as MoveOutcome.Duplicated
+        assertEquals("already-filed.pdf", duplicated.sameContentAs)
+        assertEquals(true, duplicated.identical)
+        assertFalse("the name was free; only the contents clashed", duplicated.nameWasTaken)
+        assertEquals(
+            "the new one must be kept apart, not filed alongside",
+            "the very same bytes",
+            File(File(destination, Safety.DUPLICATES_FOLDER), "brand-new-name.pdf").readText(),
+        )
+        assertEquals(
+            "what was already there must be untouched",
+            "the very same bytes",
+            File(destination, "already-filed.pdf").readText(),
+        )
+    }
+
+    @Test
+    fun `a different file of the same size is filed normally, not as a duplicate`() {
+        File(destination, "other.pdf").writeText("aaaaaaaaaa")
+        val original = source("mine.pdf", "bbbbbbbbbb")
+
+        val outcome = file(original)
+
+        assertTrue(outcome.toString(), outcome is MoveOutcome.Copied)
+        assertEquals("bbbbbbbbbb", File(destination, "mine.pdf").readText())
+    }
+
+    @Test
+    fun `a folder that will not report sizes simply files normally`() {
+        // No sizes means no candidates to compare, which must not turn into a
+        // wrong answer either way.
+        File(destination, "twin.pdf").writeText("identical bytes")
+        val original = source("fresh.pdf", "identical bytes")
+        store.hidesSize = true
+
+        val outcome = file(original)
+
+        assertTrue(outcome.toString(), outcome is MoveOutcome.Copied)
+    }
+
+    @Test
+    fun `a candidate that cannot be read is reported rather than assumed`() {
+        File(destination, "locked.pdf").writeText("identical bytes")
+        val original = source("fresh.pdf", "identical bytes")
+        store.readFails = "permission denied"
+
+        val outcome = file(original)
+
+        assertTrue(outcome.toString(), outcome is MoveOutcome.Copied)
+        val notes = (outcome as MoveOutcome.Copied).notes
+        assertTrue(notes.toString(), notes.any { it.contains("could not be read to compare") })
     }
 
     @Test

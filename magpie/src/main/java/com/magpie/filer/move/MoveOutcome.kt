@@ -34,13 +34,25 @@ sealed interface MoveOutcome {
         /** The folder the copy actually landed in, for the user to go and look. */
         val duplicatesFolder: String,
         val originalPath: String,
-        /** What was already there, so the user can judge whether it is the same file. */
+        /** What was already there under this name, when the name was the clash. */
         val existingSize: Long?,
         val incomingSize: Long,
+        /**
+         * True when the contents were compared and match, false when they were
+         * compared and differ, null when they could not be compared at all.
+         * A fingerprint settles it; a size only ever suggested.
+         */
+        val identical: Boolean? = null,
+        /**
+         * The file already in the folder with exactly these contents, when
+         * there is one. It may be under a different name from this file — that
+         * is a duplicate the name alone would never have caught.
+         */
+        val sameContentAs: String? = null,
         val notes: List<String> = emptyList(),
     ) : MoveOutcome {
-        /** Same name and same size: almost certainly the same file twice. */
-        val looksIdentical: Boolean get() = existingSize == incomingSize
+        /** Whether the name was already taken, as opposed to only the contents. */
+        val nameWasTaken: Boolean get() = existingSize != null
     }
 
     /** Nothing was copied. [reason] says why, plainly. Nothing was deleted. */

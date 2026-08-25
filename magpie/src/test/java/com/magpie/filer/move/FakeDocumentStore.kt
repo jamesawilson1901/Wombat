@@ -31,6 +31,9 @@ class FakeDocumentStore(
     /** Set to make [size] throw, like a query that fails outright. */
     var sizeFails: String? = null
 
+    /** Set to make [open] throw, like a file that cannot be read back. */
+    var readFails: String? = null
+
     /** Set to have the store save under a different name than it was asked. */
     var renamesTo: String? = null
 
@@ -52,7 +55,9 @@ class FakeDocumentStore(
                 id = child.relativeTo(root).path,
                 name = child.name,
                 isFolder = child.isDirectory,
-                size = if (child.isDirectory) null else child.length(),
+                // A provider that will not report sizes does not report them
+                // in a listing either.
+                size = if (child.isDirectory || hidesSize) null else child.length(),
             )
         }
     }
@@ -84,6 +89,11 @@ class FakeDocumentStore(
         val out = if (limit == null) bytes else bytes.copyOfRange(0, limit.toInt().coerceAtMost(bytes.size))
         target.writeBytes(out)
         return WriteReport(out.size.toLong(), emptyList())
+    }
+
+    override fun open(document: String): java.io.InputStream {
+        readFails?.let { throw IOException(it) }
+        return resolve(document).inputStream()
     }
 
     override fun size(document: String): Long? {

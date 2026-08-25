@@ -852,21 +852,38 @@ private fun explain(outcome: MoveOutcome): String = when (outcome) {
     }
 
     is MoveOutcome.Duplicated -> buildString {
-        append("Something called \"${outcome.savedAs}\" was already in ${outcome.destination}, ")
-        append("so nothing was written over. The copy went to ${outcome.duplicatesFolder} ")
+        when {
+            outcome.sameContentAs != null && !outcome.nameWasTaken ->
+                append(
+                    "This is the same file as \"${outcome.sameContentAs}\", already in " +
+                        "${outcome.destination} under a different name — the contents match " +
+                        "exactly. "
+                )
+
+            outcome.sameContentAs != null ->
+                append(
+                    "\"${outcome.savedAs}\" was already in ${outcome.destination}, and the " +
+                        "contents match exactly, so it is the same file twice. "
+                )
+
+            outcome.identical == false ->
+                append(
+                    "Something called \"${outcome.savedAs}\" was already in " +
+                        "${outcome.destination}, but it is a different file — that one is " +
+                        "${Formatting.fileSize(outcome.existingSize ?: 0L)} and this one is " +
+                        "${Formatting.fileSize(outcome.incomingSize)}. "
+                )
+
+            else ->
+                append(
+                    "Something called \"${outcome.savedAs}\" was already in " +
+                        "${outcome.destination}, and Magpie could not compare the contents " +
+                        "to say whether it is the same file. "
+                )
+        }
+        append("Nothing was written over: the copy went to ${outcome.duplicatesFolder} ")
         append("instead, and was checked byte for byte. ")
-        append(
-            if (outcome.looksIdentical) {
-                "It is the same size as the one already there, so it is very likely the " +
-                    "same file twice."
-            } else {
-                "The one already there is " +
-                    "${Formatting.fileSize(outcome.existingSize ?: 0L)} and this one is " +
-                    "${Formatting.fileSize(outcome.incomingSize)}, so they are not the " +
-                    "same file."
-            }
-        )
-        append(" The original is still at ${outcome.originalPath}.")
+        append("The original is still at ${outcome.originalPath}.")
         for (note in outcome.notes) {
             append(" ")
             append(note)

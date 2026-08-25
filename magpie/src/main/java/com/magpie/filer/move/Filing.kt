@@ -1,6 +1,7 @@
 package com.magpie.filer.move
 
 import com.magpie.filer.core.Formatting
+import com.magpie.filer.core.Hashing
 import com.magpie.filer.core.Safety
 import java.io.File
 import java.io.IOException
@@ -84,8 +85,15 @@ object Filing {
         val here = listing.getOrDefault(emptyList())
         val clash = here.firstOrNull { it.name == targetName }
 
+        // Is the same file already here under some other name? Only files of
+        // exactly the same size can be, so the sizes from the listing filter
+        // the candidates down before anything is read — usually to none.
+        val duplicateNotes = mutableListOf<String>()
+        val twin = findTwin(source, expected, here, store, duplicateNotes)
+        val duplicate = clash != null || twin != null
+
         val into: String?
-        if (clash == null) {
+        if (!duplicate) {
             into = null
         } else {
             val existing = here.firstOrNull {
@@ -99,17 +107,18 @@ object Filing {
                 if (made.isFailure || id == null) {
                     return MoveOutcome.Failed(
                         originalName,
-                        "\"$targetName\" is already in $destination, and the " +
-                            "${Safety.DUPLICATES_FOLDER} folder to put this copy in could not " +
-                            "be made (${reason(made.exceptionOrNull())}). Nothing was " +
-                            "written over."
+                        "This is already in $destination" +
+                            (if (twin != null) " as \"$twin\"" else " under that name") +
+                            ", and the ${Safety.DUPLICATES_FOLDER} folder to put this copy " +
+                            "in could not be made (${reason(made.exceptionOrNull())}). " +
+                            "Nothing was written over."
                     )
                 }
                 id
             }
         }
 
-        val landedIn = if (clash == null) destination else store.describe(into)
+        val landedIn = if (!duplicate) destination else store.describe(into)
 
         val creation = attempt { store.createFile(into, targetName, Formatting.mimeType(targetName)) }
         if (creation.isFailure) {
@@ -126,6 +135,7 @@ object Filing {
         )
 
         val notes = mutableListOf<String>()
+        notes += duplicateNotes
 
         val written = attempt { store.write(created, source) }.getOrElse { failure ->
             return MoveOutcome.Failed(
@@ -186,7 +196,7 @@ object Filing {
                 "the name, usually because something with that name was already there."
         }
 
-        return if (clash == null) {
+        return if (!duplicate) {
             MoveOutcome.Copied(
                 fileName = originalName,
                 savedAs = savedAs,
@@ -201,11 +211,71 @@ object Filing {
                 destination = destination,
                 duplicatesFolder = landedIn,
                 originalPath = source.absolutePath,
-                existingSize = clash.size,
+                existingSize = clash?.size,
                 incomingSize = expected,
+                identical = identicalTo(source, expected, clash, twin, store),
+                sameContentAs = twin,
                 notes = notes,
             )
         }
+    }
+
+    /**
+     * The name of a file already in the folder whose contents are exactly this
+     * file's, or null when there is none.
+     *
+     * Two files can only have the same contents if they have the same size, so
+     * the sizes already in the listing narrow the field before anything is
+     * opened — on an ordinary folder that is nothing at all, and nothing gets
+     * read. A folder that will not report sizes simply yields no candidates,
+     * which is the safe way round: a duplicate goes unnoticed rather than a
+     * different file being called one.
+     */
+    private fun findTwin(
+        source: File,
+        size: Long,
+        here: List<DocEntry>,
+        store: DocumentStore,
+        notesInto: MutableList<String>?,
+    ): String? {
+        val candidates = here.filter { !it.isFolder && it.size == size }
+        if (candidates.isEmpty()) return null
+
+        val ours = attempt { Hashing.of(source) }.getOrNull() ?: return null
+        for (candidate in candidates) {
+            val theirs = attempt { Hashing.of(store.open(candidate.id)) }
+            if (theirs.isFailure) {
+                notesInto?.add(
+                    "\"${candidate.name}\" is the same size as this file but could not be " +
+                        "read to compare (${reason(theirs.exceptionOrNull())})."
+                )
+                continue
+            }
+            if (theirs.getOrNull() == ours) return candidate.name
+        }
+        return null
+    }
+
+    /**
+     * Whether this file and what is already there hold the same bytes: true,
+     * false, or null when it could not be established. [findTwin] has usually
+     * answered it already; this only has work to do when the clash was a name
+     * whose file is a different size, which settles it without reading.
+     */
+    private fun identicalTo(
+        source: File,
+        size: Long,
+        clash: DocEntry?,
+        twin: String?,
+        store: DocumentStore,
+    ): Boolean? {
+        if (twin != null) return true
+        if (clash == null) return null
+        if (clash.size == null) return null
+        if (clash.size != size) return false
+        // Same name, same size, and findTwin did not match it — which means the
+        // comparison itself failed, not that the contents differ.
+        return null
     }
 
     /**
