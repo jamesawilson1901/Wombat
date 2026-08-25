@@ -201,13 +201,30 @@ Kotlin 2.2, AGP 8.11, Compose BOM 2025.06.01.
 Unit tests cover the parts worth testing without a device: filename tidying and
 suggestion building, size and file-type wording, and the finished-arriving rule.
 
+### Checking the Anthropic call without a full build
+
+The Android SDK cannot be installed in the environment this was written in, so
+CI is the only thing that compiles the app — a four-minute round trip for a
+typo. The one file that calls Anthropic does not need Android at all, though,
+and can be compiled on its own against the real published jars:
+
+```
+kotlinc -cp anthropic-java-core.jar:anthropic-java-client-okhttp.jar:json.jar:kotlinx-coroutines-core-jvm.jar \
+  core/Naming.kt core/Formatting.kt watch/SpottedFile.kt ai/FilingSuggestion.kt ai/Suggester.kt
+```
+
+`SpottedFile` refers to `Notifications.ONGOING_ID`, so it needs a two-line stub
+for that object. `javap` on the same jars settles what a builder actually
+accepts, which is faster and more reliable than remembering.
+
 ## Naming suggestions, and the one thing that leaves the phone
 
 This is the only part of Magpie that touches the network, and it is off until
 you switch it on.
 
-**Turning it on.** Settings, in the app: paste an Anthropic API key, flick
-*Suggest names and folders*, and — optionally — pick a **library folder**. The
+**Turning it on.** On the main screen, in the *Ask Claude for a name* card:
+flick the switch, paste an Anthropic API key, and — optionally — pick a
+**library folder**. The
 library folder is the one your filing folders live inside; Magpie lists the
 folders directly inside it and those are the only destinations Claude is allowed
 to choose between.
