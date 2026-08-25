@@ -25,10 +25,13 @@ import com.magpie.filer.core.TimeGroup
 import com.magpie.filer.core.Naming
 import com.magpie.filer.core.PlanResult
 import com.magpie.filer.core.Safety
+import com.magpie.filer.ai.BigSort
 import com.magpie.filer.move.Destinations
 import com.magpie.filer.move.BuildReport
 import com.magpie.filer.move.Filed
+import com.magpie.filer.move.Filing
 import com.magpie.filer.move.FolderBuilder
+import com.magpie.filer.move.FolderScope
 import com.magpie.filer.move.SafDocumentStore
 import com.magpie.filer.move.MoveOutcome
 import com.magpie.filer.move.Mover
@@ -45,6 +48,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -57,6 +61,34 @@ data class Readiness(
     val notificationsAllowed: Boolean,
     val serviceRunning: Boolean,
 )
+
+/**
+ * Where the one-button sort is up to. Alive from the moment the button is
+ * tapped until the report is dismissed; null the rest of the time.
+ */
+data class BigSortProgress(
+    /** What is happening right now, in words. */
+    val stage: String,
+    /** How many files the sweep found. */
+    val total: Int = 0,
+    /** Moved and verified, original removed. */
+    val moved: Int = 0,
+    /** Diverted into a Duplicates folder. */
+    val duplicated: Int = 0,
+    /** Left alone, with a reason in [skippedWhy]. */
+    val skipped: Int = 0,
+    /** Attempted and failed; originals untouched. */
+    val failed: Int = 0,
+    /** Folders the sort created because nothing existing fitted. */
+    val newFolders: List<String> = emptyList(),
+    val done: Boolean = false,
+    /** The closing sentence, set when [done]. */
+    val summary: String? = null,
+    /** Why things were skipped or failed, capped for the screen. */
+    val skippedWhy: List<String> = emptyList(),
+) {
+    val processed: Int get() = moved + duplicated + skipped + failed
+}
 
 /** Where the user is in the file-this flow. */
 sealed interface FilingStep {
@@ -299,7 +331,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun readInFolders(): List<SpottedFile> {
+    private fun readInFolders(limit: Int = IN_FOLDERS_LIMIT): List<SpottedFile> {
         val alreadyListed = (waiting.value + ignored.value).map { it.path }.toSet()
         val found = ArrayList<SpottedFile>()
         for (root in WatchRoots.sortable(app)) {
@@ -324,7 +356,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         }
-        return found.sortedByDescending { it.spottedAt }.take(IN_FOLDERS_LIMIT)
+        return found.sortedByDescending { it.spottedAt }.take(limit)
     }
 
     // ---- selection ---------------------------------------------------------
@@ -362,6 +394,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Start filing one file: the folder picker opens first, every time. */
     fun beginFiling(file: SpottedFile) {
+        if (busySorting()) return
         if (_step.value !is FilingStep.Idle) {
             store.report(
                 "Magpie is already filing something. Finish that one — or cancel it — " +
@@ -405,6 +438,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             store.report("Nothing is waiting, so there is nothing to ask about.")
             return
         }
+        if (busySorting()) return
         if (_step.value !is FilingStep.Idle) {
             store.report("Magpie is busy filing. Finish that first.")
             return
@@ -546,6 +580,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** False when a filing flow is already in progress, so nothing is stranded. */
     private fun startFiling(files: List<SpottedFile>): Boolean {
+        if (busySorting()) return false
         if (_step.value !is FilingStep.Idle) return false
         _step.value = if (files.size == 1) {
             askName(files.first(), prefill = null)
@@ -750,43 +785,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun startMoves(files: List<SpottedFile>, tree: Uri, renames: Map<String, String>) {
         scope.launch {
             _step.value = FilingStep.Working(
-                if (files.size == 1) "Copying ${files.first().name}…"
-                else "Copying ${files.size} files…"
+                if (files.size == 1) "Moving ${files.first().name}…"
+                else "Moving ${files.size} files…"
             )
 
             val folder = Destinations.folderPath(tree)
             val outcomes = ArrayList<MoveOutcome>(files.size)
             for (file in files) {
                 val outcome = mover.copy(file, tree, renames[file.path] ?: file.name)
-
-                // Filing into a folder Magpie watches would otherwise have it
-                // spot its own copy a moment later and offer it straight back.
-                // A duplicate lands one folder deeper, so that path is marked
-                // instead.
-                val landed = when (outcome) {
-                    is MoveOutcome.Copied ->
-                        folder?.let { File(it, outcome.savedAs) }
-
-                    is MoveOutcome.Duplicated ->
-                        folder?.let { File(File(it, Safety.DUPLICATES_FOLDER), outcome.savedAs) }
-
-                    else -> null
-                }
-                if (landed != null) store.markOffered(landed.absolutePath)
-
-                // Remember which original is now redundant, so the user can be
-                // told what is safe to clear up. Magpie still never removes it.
-                rememberFiled(file, outcome, tree)
-
-                // A verified copy takes the file off the waiting list: the user
-                // has dealt with it. The original is still on the phone — Magpie
-                // never deletes — and the report says so in as many words, but
-                // it does not need offering again.
-                if (outcome is MoveOutcome.Copied || outcome is MoveOutcome.Duplicated) {
-                    store.drop(file.path)
-                }
-                if (outcome !is MoveOutcome.Failed) Notifications.cancel(app, file)
-
+                bookkeep(file, outcome, tree, folder)
                 outcomes += outcome
             }
 
@@ -794,6 +801,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _selecting.value = false
             _step.value = FilingStep.Report(outcomes)
         }
+    }
+
+    /**
+     * Everything one finished move changes outside the destination folder:
+     * the watcher's ignore list, the leftovers list, the waiting list, and the
+     * notification. Shared between the filing flow and the big sort so the two
+     * can never drift apart.
+     */
+    private fun bookkeep(file: SpottedFile, outcome: MoveOutcome, tree: Uri, folder: File?) {
+        // Filing into a folder Magpie watches would otherwise have it spot its
+        // own arrival a moment later and offer it straight back. A duplicate
+        // lands one folder deeper, so that path is marked instead.
+        val landed = when (outcome) {
+            is MoveOutcome.Copied ->
+                folder?.let { File(it, outcome.savedAs) }
+
+            is MoveOutcome.Duplicated ->
+                folder?.let { File(File(it, Safety.DUPLICATES_FOLDER), outcome.savedAs) }
+
+            else -> null
+        }
+        if (landed != null) store.markOffered(landed.absolutePath)
+
+        // A move that verified but could not remove its original leaves a
+        // leftover, and the Safe-to-clear list is exactly the list of those.
+        // A completed move leaves nothing to remember.
+        val leftBehind = when (outcome) {
+            is MoveOutcome.Copied -> !outcome.originalRemoved
+            is MoveOutcome.Duplicated -> !outcome.originalRemoved
+            else -> false
+        }
+        if (leftBehind) rememberFiled(file, outcome, tree)
+
+        // A verified move takes the file off the waiting list either way: the
+        // user has dealt with it.
+        if (outcome is MoveOutcome.Copied || outcome is MoveOutcome.Duplicated) {
+            store.drop(file.path)
+        }
+        if (outcome !is MoveOutcome.Failed) Notifications.cancel(app, file)
     }
 
     private fun rememberFiled(file: SpottedFile, outcome: MoveOutcome, tree: Uri) {
@@ -975,6 +1021,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun fileGroup(index: Int, stem: String, folderName: String? = null) {
         val group = _groups.value.getOrNull(index) ?: return
+        if (busySorting()) return
         if (_step.value !is FilingStep.Idle) {
             store.report("Magpie is already filing something. Finish that first.")
             return
@@ -1070,6 +1117,296 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Names for the group being filed, applied when the folder comes back. */
     private var pendingGroupNames: Map<String, String> = emptyMap()
+
+    // ---- the one-button sort -----------------------------------------------
+
+    private val _bigSort = MutableStateFlow<BigSortProgress?>(null)
+    val bigSort: StateFlow<BigSortProgress?> = _bigSort.asStateFlow()
+
+    private var bigSortJob: Job? = null
+
+    private val bigSortRunning: Boolean get() = _bigSort.value?.done == false
+
+    /** True — and said out loud — when hand-filing must wait for the big sort. */
+    private fun busySorting(): Boolean {
+        if (!bigSortRunning) return false
+        store.report("The big sort is running. Stop it, or let it finish, before filing by hand.")
+        return true
+    }
+
+    /**
+     * The button: sweep everything in the watched folders and sort the lot.
+     *
+     * Rules decide what they can instantly; whole runs and loose files go to
+     * Claude batch after batch until everything has an answer or a reason it
+     * does not; each decision is carried out as it arrives — a verified move
+     * into a library folder, created on the spot when nothing existing fits.
+     * No confirmations, one Stop button, and a report at the end.
+     */
+    fun startBigSort() {
+        if (bigSortRunning) {
+            store.report("The big sort is already running.")
+            return
+        }
+        if (_step.value !is FilingStep.Idle) {
+            store.report("Magpie is filing something by hand. Finish that first.")
+            return
+        }
+        val settings = store.suggestions.value
+        if (settings.library == null) {
+            store.report(
+                "Choose your library folder first — under Suggestions — so the sort has " +
+                    "somewhere to build. Nothing was sorted."
+            )
+            return
+        }
+        bigSortJob = scope.launch {
+            try {
+                runBigSort(settings.library, settings.apiKey, settings.usable)
+            } finally {
+                // However this ends — finished, stopped, or torn down — the
+                // card must never be left saying it is still working.
+                val state = _bigSort.value
+                if (state != null && !state.done) {
+                    _bigSort.value = state.copy(
+                        done = true,
+                        stage = "Stopped.",
+                        summary = "Stopped after ${state.moved} moved. Everything already " +
+                            "moved is in place; everything else is untouched. Tap the " +
+                            "button to carry on where it left off.",
+                    )
+                }
+            }
+        }
+    }
+
+    fun cancelBigSort() {
+        bigSortJob?.cancel()
+        bigSortJob = null
+    }
+
+    fun dismissBigSort() {
+        if (!bigSortRunning) _bigSort.value = null
+    }
+
+    private suspend fun runBigSort(library: Uri, apiKey: String, askClaude: Boolean) {
+        fun progress(change: (BigSortProgress) -> BigSortProgress) {
+            _bigSort.value = _bigSort.value?.let(change)
+        }
+
+        _bigSort.value = BigSortProgress(stage = "Reading your folders…")
+
+        val libStore = SafDocumentStore(app, library, Destinations.label(app, library))
+        val libraryPath = Destinations.folderPath(library)
+        val volumes = WatchRoots.volumePaths(app)
+
+        // Folder name to document id, for everything that exists now and
+        // everything the sort creates along the way.
+        val folders = HashMap<String, String>()
+        when (val listing = withContext(Dispatchers.IO) { LibraryFolders.list(app, library) }) {
+            is LibraryListing.Folders -> listing.folders.forEach { folders[it.name] = it.documentId }
+            is LibraryListing.Failed -> {
+                _bigSort.value = BigSortProgress(
+                    stage = "Could not start.", done = true,
+                    summary = "The library folder could not be read: ${listing.reason}",
+                )
+                return
+            }
+        }
+
+        val sweep = withContext(Dispatchers.IO) { readInFolders(limit = Int.MAX_VALUE) }
+        val everything = LinkedHashMap<String, SpottedFile>()
+        waiting.value.forEach { everything[it.path] = it }
+        sweep.forEach { everything.putIfAbsent(it.path, it) }
+        val files = everything.values.toList()
+
+        if (files.isEmpty()) {
+            _bigSort.value = BigSortProgress(
+                stage = "Done.", done = true,
+                summary = "There is nothing to sort — the watched folders are clear.",
+            )
+            return
+        }
+
+        val skippedWhy = ArrayList<String>()
+        _bigSort.value = BigSortProgress(
+            stage = "Working out what belongs together…",
+            total = files.size,
+        )
+
+        // Reading a photo's taken-at time opens the file, so the whole split
+        // happens off the main thread.
+        val split = withContext(Dispatchers.IO) {
+            BigSort.split(files, store.rules.value, _groupGapMinutes.value * 60_000, Taken::of)
+        }
+
+        /** Move [batchFiles] into the library folder called [rawFolder], creating it if needed. */
+        suspend fun moveInto(
+            rawFolder: String,
+            batchFiles: List<SpottedFile>,
+            names: Map<String, String>,
+        ) {
+            val existing = folders.keys.firstOrNull { it.equals(rawFolder, ignoreCase = true) }
+            val folderName = existing ?: run {
+                val wanted = BigSort.usableFolderName(rawFolder)
+                val id = wanted?.let {
+                    withContext(Dispatchers.IO) {
+                        try {
+                            libStore.createFolder(null, it)
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
+                }
+                if (wanted == null || id == null) {
+                    progress {
+                        it.copy(skipped = it.skipped + batchFiles.size)
+                    }
+                    skippedWhy += "${batchFiles.size} file" +
+                        (if (batchFiles.size == 1) "" else "s") +
+                        " skipped: the folder \"$rawFolder\" could not be made."
+                    return
+                }
+                folders[wanted] = id
+                progress { it.copy(newFolders = it.newFolders + wanted) }
+                wanted
+            }
+
+            val scoped = FolderScope(libStore, folders.getValue(folderName), folderName)
+            val landingIn = libraryPath?.let { File(it, folderName) }
+            for (file in batchFiles) {
+                kotlin.coroutines.coroutineContext.ensureActive()
+                progress { it.copy(stage = "Moving into $folderName… (${it.processed + 1} of ${it.total})") }
+                val outcome = withContext(Dispatchers.IO) {
+                    Filing.file(
+                        source = file.file,
+                        originalName = file.name,
+                        targetName = names[file.path] ?: file.name,
+                        store = scoped,
+                        volumes = volumes,
+                        destinationFolder = landingIn,
+                    )
+                }
+                bookkeep(file, outcome, library, landingIn)
+                when (outcome) {
+                    is MoveOutcome.Failed -> skippedWhy += "${file.name}: ${outcome.reason}"
+                    is MoveOutcome.Refused -> skippedWhy += "${file.name}: ${outcome.reason}"
+                    else -> {}
+                }
+                progress {
+                    when (outcome) {
+                        is MoveOutcome.Copied -> it.copy(moved = it.moved + 1)
+                        is MoveOutcome.Duplicated -> it.copy(duplicated = it.duplicated + 1)
+                        is MoveOutcome.Unchanged -> it.copy(skipped = it.skipped + 1)
+                        is MoveOutcome.Failed, is MoveOutcome.Refused ->
+                            it.copy(failed = it.failed + 1)
+                    }
+                }
+            }
+        }
+
+        // 1) What the rules already answer, folder by folder — free and instant.
+        for ((folderName, ruledFiles) in split.ruled.groupBy({ it.second.folder }, { it.first })) {
+            moveInto(folderName, ruledFiles, emptyMap())
+        }
+
+        // 2) Everything else, batch by batch to Claude.
+        if (split.entries.isNotEmpty() && !askClaude) {
+            val count = split.entries.sumOf { BigSort.sizeOf(it) }
+            progress { it.copy(skipped = it.skipped + count) }
+            skippedWhy += "$count files needed Claude, and suggestions are off or there is " +
+                "no API key. The rules sorted what they could."
+        } else if (split.entries.isNotEmpty()) {
+            var runCounter = 0
+            val batches = BigSort.batches(split.entries)
+            for ((index, batch) in batches.withIndex()) {
+                kotlin.coroutines.coroutineContext.ensureActive()
+                progress { it.copy(stage = "Asking Claude (batch ${index + 1} of ${batches.size})…") }
+
+                val asks = batch.map { entry ->
+                    when (entry) {
+                        is BigSort.Entry.Single -> Suggester.SortAsk.One(entry.file)
+                        is BigSort.Entry.Run -> Suggester.SortAsk.Run(
+                            id = "RUN_${++runCounter}",
+                            count = entry.group.size,
+                            range = Formatting.timeRange(
+                                entry.group.earliest,
+                                entry.group.latest,
+                                java.time.ZoneId.systemDefault(),
+                            ),
+                            samples = entry.group.files.take(3).map { it.name },
+                        )
+                    }
+                }
+                val answers = Suggester.sortMany(asks, folders.keys.sorted(), apiKey)
+
+                for ((entry, ask) in batch.zip(asks)) {
+                    val key = when (ask) {
+                        is Suggester.SortAsk.One -> ask.file.path
+                        is Suggester.SortAsk.Run -> ask.id
+                    }
+                    val answer = answers[key]
+                    if (answer == null || answer.folder.isBlank()) {
+                        val count = BigSort.sizeOf(entry)
+                        progress { it.copy(skipped = it.skipped + count) }
+                        skippedWhy += when (entry) {
+                            is BigSort.Entry.Single -> "${entry.file.name}: " +
+                                if (answer == null) "Claude gave no answer for it."
+                                else "Claude could not tell where it belongs."
+
+                            is BigSort.Entry.Run -> "A run of ${entry.group.size} files: " +
+                                if (answer == null) "Claude gave no answer for it."
+                                else "Claude could not tell where it belongs."
+                        }
+                        continue
+                    }
+                    when (entry) {
+                        is BigSort.Entry.Single -> moveInto(
+                            answer.folder,
+                            listOf(entry.file),
+                            mapOf(entry.file.path to answer.name),
+                        )
+
+                        is BigSort.Entry.Run -> {
+                            val names = Grouping.numbered(answer.name, entry.group.files)
+                            if (names.isEmpty()) {
+                                progress { it.copy(skipped = it.skipped + entry.group.size) }
+                                skippedWhy += "A run of ${entry.group.size} files: Claude's " +
+                                    "name for it had nothing usable left."
+                            } else {
+                                moveInto(answer.folder, entry.group.files, names)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        val state = _bigSort.value ?: return
+        _bigSort.value = state.copy(
+            done = true,
+            stage = "Done.",
+            summary = buildString {
+                append("Sorted ").append(state.moved + state.duplicated)
+                append(" of ").append(state.total).append(" files")
+                if (state.duplicated > 0) {
+                    append(" (").append(state.duplicated).append(" into Duplicates)")
+                }
+                append(".")
+                if (state.newFolders.isNotEmpty()) {
+                    append(" Made ").append(state.newFolders.size).append(" new folder")
+                    if (state.newFolders.size > 1) append("s")
+                    append(": ").append(state.newFolders.joinToString(", ")).append(".")
+                }
+                if (state.skipped > 0) append(" ${state.skipped} left alone.")
+                if (state.failed > 0) append(" ${state.failed} failed — originals untouched.")
+            },
+            skippedWhy = skippedWhy.take(20) +
+                if (skippedWhy.size > 20) listOf("…and ${skippedWhy.size - 20} more.") else emptyList(),
+        )
+        regroup()
+        loadInFolders()
+    }
 
     // ---- building a folder tree --------------------------------------------
 

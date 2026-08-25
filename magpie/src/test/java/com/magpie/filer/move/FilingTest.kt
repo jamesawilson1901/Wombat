@@ -13,10 +13,12 @@ import java.io.File
 /**
  * Filing, end to end, with real bytes on real disk.
  *
- * The two things these exist to prove are the two the user asked for and that
- * nothing else could check: that **nothing is ever deleted**, and that a name
- * already in use sends the copy to a Duplicates folder instead of over the top
- * of what is there.
+ * The things these exist to prove are the ones the user asked for and that
+ * nothing else could check: that filing is a **safe move** — the original is
+ * removed only after the copy has verified, and never on any failure — that
+ * nothing at a destination can ever be deleted, and that a name already in use
+ * sends the copy to a Duplicates folder instead of over the top of what is
+ * there.
  */
 class FilingTest {
 
@@ -73,14 +75,98 @@ class FilingTest {
     }
 
     @Test
-    fun `a successful copy leaves the original exactly where it was`() {
+    fun `a verified move removes the original and says so`() {
         val original = source("invoice.pdf", "hello")
         val outcome = file(original)
 
         assertTrue(outcome.toString(), outcome is MoveOutcome.Copied)
-        assertTrue("the original must survive filing", original.exists())
-        assertEquals("hello", original.readText())
-        assertEquals(original.absolutePath, (outcome as MoveOutcome.Copied).originalPath)
+        assertEquals("hello", File(destination, "invoice.pdf").readText())
+        assertTrue((outcome as MoveOutcome.Copied).originalRemoved)
+        assertFalse("a move leaves nothing behind", original.exists())
+        assertEquals(original.absolutePath, outcome.originalPath)
+    }
+
+    @Test
+    fun `the original is removed only after the copy has verified`() {
+        val original = source("proof.pdf", "0123456789")
+        var copyStoodFirst = false
+
+        val outcome = Filing.file(
+            source = original,
+            originalName = original.name,
+            targetName = original.name,
+            store = store,
+            volumes = volumes,
+            destinationFolder = destination,
+            removeSource = { file ->
+                // At the moment of removal the verified copy must already be
+                // in place, bytes and all — otherwise the order is wrong.
+                copyStoodFirst = File(destination, "proof.pdf").readText() == "0123456789"
+                file.delete()
+            },
+        )
+
+        assertTrue(outcome.toString(), outcome is MoveOutcome.Copied)
+        assertTrue("the verified copy must exist before the original goes", copyStoodFirst)
+    }
+
+    @Test
+    fun `a failed copy never even asks for the original's removal`() {
+        val original = source("short.bin", "0123456789")
+        store.truncateAt = 4
+        var asked = false
+
+        val outcome = Filing.file(
+            source = original,
+            originalName = original.name,
+            targetName = original.name,
+            store = store,
+            volumes = volumes,
+            destinationFolder = destination,
+            removeSource = { asked = true; false },
+        )
+
+        assertTrue(outcome.toString(), outcome is MoveOutcome.Failed)
+        assertFalse("removal must never be attempted after a failure", asked)
+        assertTrue(original.exists())
+    }
+
+    @Test
+    fun `a removal that fails turns the move into a copy, with a note`() {
+        val original = source("stuck.pdf", "content")
+
+        val outcome = Filing.file(
+            source = original,
+            originalName = original.name,
+            targetName = original.name,
+            store = store,
+            volumes = volumes,
+            destinationFolder = destination,
+            removeSource = { false },
+        )
+
+        assertTrue(outcome.toString(), outcome is MoveOutcome.Copied)
+        val copied = outcome as MoveOutcome.Copied
+        assertFalse(copied.originalRemoved)
+        assertTrue("both files must still exist", original.exists())
+        assertEquals("content", File(destination, "stuck.pdf").readText())
+        assertTrue(copied.notes.toString(), copied.notes.any { it.contains("became a copy") })
+    }
+
+    @Test
+    fun `a duplicate's original goes too, once its copy has verified`() {
+        File(destination, "report.pdf").writeText("the one already here")
+        val original = source("report.pdf", "the new one")
+
+        val outcome = file(original)
+
+        assertTrue(outcome.toString(), outcome is MoveOutcome.Duplicated)
+        assertTrue((outcome as MoveOutcome.Duplicated).originalRemoved)
+        assertFalse(original.exists())
+        assertEquals(
+            "the new one",
+            File(File(destination, Safety.DUPLICATES_FOLDER), "report.pdf").readText(),
+        )
     }
 
     @Test
@@ -105,7 +191,7 @@ class FilingTest {
         )
         val reason = (outcome as MoveOutcome.Failed).reason
         assertTrue(reason, reason.contains("Only 4 of 10 bytes"))
-        assertTrue(reason, reason.contains("never deletes"))
+        assertTrue(reason, reason.contains("untouched"))
     }
 
     @Test

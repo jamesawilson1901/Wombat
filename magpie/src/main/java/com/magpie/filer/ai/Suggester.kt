@@ -364,6 +364,169 @@ object Suggester {
         return found
     }
 
+    /** One thing for the big sort to ask about. */
+    sealed interface SortAsk {
+        /** One file, keyed in the answer by its path. */
+        data class One(val file: SpottedFile) : SortAsk
+
+        /** A whole run sharing one decision, keyed in the answer by [id]. */
+        data class Run(
+            val id: String,
+            val count: Int,
+            val range: String,
+            val samples: List<String>,
+        ) : SortAsk
+    }
+
+    private const val SORT_PROMPT =
+        "You are sorting years of accumulated phone files into folders — the big clean-up. " +
+            "You are given a list of files (name, type, size, when it is from) and runs — " +
+            "sets of files created together in one session, which share a single decision. " +
+            "You never see contents, so everything must follow from names, types and dates.\n\n" +
+            "For each file or run, reply with three things.\n\n" +
+            "name: for a file, what it should be called, ending in exactly the extension it " +
+            "already has; if the name is already clear, return it unchanged. For a run, one " +
+            "short stem in capitals with underscores, at most three words, no extension, no " +
+            "numbering — say what the run is. Never invent a date, a company, an author or a " +
+            "subject that is not already there, and never name or identify a person.\n\n" +
+            "folder: where it belongs. Prefer one of the existing folder names, copied " +
+            "character for character. Only when none of them is a reasonable home, name a " +
+            "new folder to create: short, in capitals with underscores, and general enough " +
+            "to hold more than this one thing — SCREENSHOTS, INVOICES, PHOTOS_2019 — never " +
+            "a folder for a single file, and never a person's name. Files of the same kind " +
+            "and files from the same event must be given the same folder. An empty string " +
+            "means you cannot tell, and the file will be left alone.\n\n" +
+            "reason: one short sentence, at most fifteen words, saying why.\n\n" +
+            "Answer for every entry, copying each entry's \"given\" key back exactly."
+
+    /**
+     * Ask about one batch of the big sort: loose files and whole runs together,
+     * against the folders that exist so far. The one place Claude may propose a
+     * folder that does not exist yet — the big sort is allowed to build the
+     * organisation, not only fill it.
+     *
+     * Answers come back keyed by a file's path or a run's id, matched by the
+     * "given" name sent, never by position. A missing or unusable answer means
+     * that entry is skipped, not misfiled.
+     */
+    suspend fun sortMany(
+        asks: List<SortAsk>,
+        folders: List<String>,
+        apiKey: String,
+        baseUrl: String? = null,
+    ): Map<String, FilingSuggestion> = withContext(Dispatchers.IO) {
+        askSort(asks.take(BATCH_LIMIT), folders, apiKey, baseUrl)
+    }
+
+    private fun askSort(
+        asks: List<SortAsk>,
+        folders: List<String>,
+        apiKey: String,
+        baseUrl: String?,
+    ): Map<String, FilingSuggestion> {
+        if (apiKey.isBlank() || asks.isEmpty()) return emptyMap()
+
+        val question = buildString {
+            append("Here are ").append(asks.size).append(" entries to sort.\n\n")
+            for (ask in asks) {
+                when (ask) {
+                    is SortAsk.One -> {
+                        append("- given: ").append(ask.file.name)
+                        append(" | file | size: ").append(Formatting.fileSize(ask.file.size))
+                        append(" | type: ").append(Formatting.typeLabel(ask.file.name))
+                        append(" | in: ").append(ask.file.source).append('\n')
+                    }
+
+                    is SortAsk.Run -> {
+                        append("- given: ").append(ask.id)
+                        append(" | run of ").append(ask.count).append(" files")
+                        append(" | from: ").append(ask.range)
+                        append(" | sample names: ").append(ask.samples.joinToString(", "))
+                        append('\n')
+                    }
+                }
+            }
+            append("\nExisting folders: ")
+            append(if (folders.isEmpty()) "(none yet — name new ones)" else folders.joinToString(", "))
+            append("\n\nAnswer for every entry, copying each \"given\" back exactly.")
+        }
+
+        val params = MessageCreateParams.builder()
+            .model(MODEL)
+            .maxTokens(MAX_TOKENS * 4)
+            .system(SORT_PROMPT)
+            .outputConfig(
+                OutputConfig.builder()
+                    .effort(OutputConfig.Effort.LOW)
+                    .format(JsonOutputFormat.builder().schema(BATCH_SCHEMA).build())
+                    .build()
+            )
+            .addUserMessage(question)
+            .build()
+
+        return try {
+            readSort(clientFor(apiKey, baseUrl).messages().create(params), asks)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            // The big sort carries on to the next batch and reports the ones it
+            // could not decide; a failed request must cost one batch, not the run.
+            emptyMap()
+        }
+    }
+
+    private fun readSort(
+        message: com.anthropic.models.messages.Message,
+        asks: List<SortAsk>,
+    ): Map<String, FilingSuggestion> {
+        if (message.stopDetails().orElse(null) != null) return emptyMap()
+
+        val text = message.content()
+            .mapNotNull { it.text().orElse(null) }
+            .joinToString(separator = "") { it.text() }
+            .trim()
+        if (text.isEmpty()) return emptyMap()
+
+        val array = try {
+            JSONObject(text).optJSONArray("files")
+        } catch (e: JSONException) {
+            null
+        } ?: return emptyMap()
+
+        val files = asks.filterIsInstance<SortAsk.One>().associateBy { it.file.name }
+        val runs = asks.filterIsInstance<SortAsk.Run>().associateBy { it.id }
+
+        val found = HashMap<String, FilingSuggestion>()
+        for (i in 0 until array.length()) {
+            val item = array.optJSONObject(i) ?: continue
+            val given = item.optString("given")
+            val folder = item.optString("folder").trim()
+            val reason = item.optString("reason").trim()
+
+            val file = files[given]
+            if (file != null) {
+                val proposed = Naming.withExtensionOf(
+                    Naming.sanitise(item.optString("name")),
+                    file.file.name,
+                )
+                found[file.file.path] = FilingSuggestion(
+                    name = if (Naming.isUsable(proposed)) proposed else file.file.name,
+                    folder = folder,
+                    reason = reason,
+                )
+                continue
+            }
+
+            val run = runs[given] ?: continue
+            // A run's answer is a stem: cleaned like a typed one, any extension
+            // cut off, because each file in the run keeps its own.
+            val stem = Naming.stem(Naming.sanitise(item.optString("name"))).trim()
+            if (stem.isBlank()) continue
+            found[run.id] = FilingSuggestion(name = stem, folder = folder, reason = reason)
+        }
+        return found
+    }
+
     private const val RUN_PROMPT =
         "You help someone name and file a run of files that were created together — " +
             "generated stills, video tests, photos from one session. You are shown a few " +

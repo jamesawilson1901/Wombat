@@ -34,7 +34,9 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -104,6 +106,7 @@ fun MagpieScreen(viewModel: MainViewModel) {
     val runSuggestions by viewModel.runSuggestions.collectAsState()
     val askingRuns by viewModel.askingRuns.collectAsState()
     val suggestionSettings by viewModel.suggestionSettings.collectAsState()
+    val bigSort by viewModel.bigSort.collectAsState()
 
     val context = LocalContext.current
     var showIgnored by rememberSaveable { mutableStateOf(false) }
@@ -216,6 +219,15 @@ fun MagpieScreen(viewModel: MainViewModel) {
                 )
             }
 
+            item {
+                BigSortCard(
+                    state = bigSort,
+                    onStart = viewModel::startBigSort,
+                    onStop = viewModel::cancelBigSort,
+                    onDismiss = viewModel::dismissBigSort,
+                )
+            }
+
             items(problems, key = { it.id }) { problem ->
                 ProblemCard(problem.message) { viewModel.dismissProblem(problem.id) }
             }
@@ -320,7 +332,7 @@ fun MagpieScreen(viewModel: MainViewModel) {
                         )
                         Text(
                             text = "A new run starts after ${gapWords(groupGap)} of quiet. " +
-                                "Nothing is sent anywhere and nothing is copied until you " +
+                                "Nothing is sent anywhere and nothing is moved until you " +
                                 "file a run.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -516,9 +528,9 @@ fun MagpieScreen(viewModel: MainViewModel) {
                 if (filed.isEmpty()) {
                     item {
                         Text(
-                            text = "Nothing here yet. Once you file something, the original " +
-                                "it was copied from is listed here so you know it is safe to " +
-                                "remove.",
+                            text = "Nothing here yet. Moving a file normally leaves nothing " +
+                                "behind — this list is for the rare move whose original " +
+                                "could not be removed, so you know it is safe to clear.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -526,11 +538,12 @@ fun MagpieScreen(viewModel: MainViewModel) {
                 } else {
                     item {
                         Text(
-                            text = "Each of these has a copy that Magpie checked byte for " +
-                                "byte, so the original is redundant. Magpie will not remove " +
-                                "them — that is the fail-safe — but you can, in your file " +
-                                "manager. Anything whose copy has since gone is dropped from " +
-                                "this list rather than left saying something untrue.",
+                            text = "Each of these is an original whose move verified byte " +
+                                "for byte but could not be removed afterwards, so both " +
+                                "copies exist. The moved copy is checked and in place — " +
+                                "remove these in your file manager when you like. Anything " +
+                                "whose moved copy has since gone is dropped from this list " +
+                                "rather than left saying something untrue.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -847,6 +860,89 @@ private fun ProblemCard(message: String, onDismiss: () -> Unit) {
     }
 }
 
+/**
+ * The one button the whole app was for. Idle, it explains and offers to start;
+ * running, it shows the count climbing and a Stop button; finished, it reports.
+ */
+@Composable
+private fun BigSortCard(
+    state: BigSortProgress?,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Sort it all", style = MaterialTheme.typography.titleMedium)
+
+            when {
+                state == null -> {
+                    Text(
+                        text = "One tap. Everything in the watched folders is named and " +
+                            "moved into your library — your rules first, Claude for the " +
+                            "rest, new folders made when nothing fits. Runs of files that " +
+                            "arrived together stay together. Every move is copied, " +
+                            "verified, and only then removed from where it was, so " +
+                            "nothing can be lost.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Button(onClick = onStart, modifier = Modifier.fillMaxWidth()) {
+                        Text("Sort everything now")
+                    }
+                }
+
+                !state.done -> {
+                    Text(state.stage, style = MaterialTheme.typography.bodyMedium)
+                    if (state.total > 0) {
+                        LinearProgressIndicator(
+                            progress = {
+                                state.processed.toFloat() / state.total.toFloat()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text(
+                            text = "Moved ${state.moved}" +
+                                (if (state.duplicated > 0) " · Duplicates ${state.duplicated}" else "") +
+                                (if (state.skipped > 0) " · Left alone ${state.skipped}" else "") +
+                                (if (state.failed > 0) " · Failed ${state.failed}" else "") +
+                                " · of ${state.total}",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    } else {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                    OutlinedButton(onClick = onStop, modifier = Modifier.fillMaxWidth()) {
+                        Text("Stop — finish the file it is on and go no further")
+                    }
+                }
+
+                else -> {
+                    state.summary?.let {
+                        Text(it, style = MaterialTheme.typography.bodyMedium)
+                    }
+                    if (state.skippedWhy.isNotEmpty()) {
+                        HorizontalDivider()
+                        state.skippedWhy.forEach { why ->
+                            Text(why, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                    Row(
+                        horizontalArrangement = Arrangement.End,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        TextButton(onClick = onDismiss) { Text("Done") }
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun SelectionBar(
     count: Int,
@@ -1016,8 +1112,9 @@ private fun FiledRow(entry: Filed, onDismiss: () -> Unit) {
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = "Copied to ${entry.destination}" +
-                    if (entry.savedAs != entry.originalName) " as \"${entry.savedAs}\"" else "",
+                text = "Moved to ${entry.destination}" +
+                    (if (entry.savedAs != entry.originalName) " as \"${entry.savedAs}\"" else "") +
+                    " — this original stayed behind and is safe to remove",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1486,15 +1583,15 @@ private fun ReportDialog(
 ) {
     // A duplicate still arrived safely, so it counts as filed; the line
     // underneath says where it actually went.
-    val copied = outcomes.count {
+    val moved = outcomes.count {
         it is MoveOutcome.Copied || it is MoveOutcome.Duplicated
     }
     val title = when {
-        copied == 0 -> if (outcomes.size == 1) "Not copied" else "Nothing copied"
-        copied < outcomes.size -> "$copied of ${outcomes.size} filed"
+        moved == 0 -> if (outcomes.size == 1) "Not moved" else "Nothing moved"
+        moved < outcomes.size -> "$moved of ${outcomes.size} filed"
         outcomes.any { it is MoveOutcome.Duplicated } -> "Filed, duplicates kept apart"
         outcomes.size == 1 -> "Filed"
-        else -> "All $copied filed"
+        else -> "All $moved filed"
     }
 
     AlertDialog(
@@ -1559,15 +1656,16 @@ private fun ConfirmBatchDialog(
 ) {
     AlertDialog(
         onDismissRequest = onCancel,
-        title = { Text("Copy ${step.files.size} into ${step.destination}?") },
+        title = { Text("Move ${step.files.size} into ${step.destination}?") },
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
-                    text = "Nothing has been copied yet. This is exactly what will happen, " +
-                        "and originals stay where they are as always.",
+                    text = "Nothing has been moved yet. This is exactly what will happen. " +
+                        "Each file is copied, verified byte for byte, and only then " +
+                        "removed from where it is now.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1614,7 +1712,7 @@ private fun ConfirmBatchDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onConfirm) { Text("Copy ${step.files.size} files") }
+            TextButton(onClick = onConfirm) { Text("Move ${step.files.size} files") }
         },
         dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
     )
@@ -1743,11 +1841,15 @@ private fun SuggestionDialog(
 
 private fun explain(outcome: MoveOutcome): String = when (outcome) {
     is MoveOutcome.Copied -> buildString {
-        append("Copied to ${outcome.destination}")
+        append("Moved to ${outcome.destination}")
         if (outcome.savedAs != outcome.fileName) append(", as \"${outcome.savedAs}\"")
-        append(", and checked against the original byte for byte. ")
-        append("The original is still at ${outcome.originalPath} — Magpie never deletes ")
-        append("anything, so remove it yourself when you are happy with the copy.")
+        append(", checked against the original byte for byte")
+        if (outcome.originalRemoved) {
+            append(", and the original removed.")
+        } else {
+            append(". The original at ${outcome.originalPath} could not be removed, so ")
+            append("it is still there — the Safe to clear list has it.")
+        }
         for (note in outcome.notes) {
             append(" ")
             append(note)
@@ -1784,9 +1886,14 @@ private fun explain(outcome: MoveOutcome): String = when (outcome) {
                         "to say whether it is the same file. "
                 )
         }
-        append("Nothing was written over: the copy went to ${outcome.duplicatesFolder} ")
+        append("Nothing was written over: it went to ${outcome.duplicatesFolder} ")
         append("instead, and was checked byte for byte. ")
-        append("The original is still at ${outcome.originalPath}.")
+        if (outcome.originalRemoved) {
+            append("The original was then removed.")
+        } else {
+            append("The original at ${outcome.originalPath} could not be removed, so it ")
+            append("is still there — the Safe to clear list has it.")
+        }
         for (note in outcome.notes) {
             append(" ")
             append(note)
@@ -1797,7 +1904,7 @@ private fun explain(outcome: MoveOutcome): String = when (outcome) {
         "Nothing was read or written. ${outcome.reason} Magpie only ever touches ordinary " +
             "files on your own storage."
 
-    is MoveOutcome.Failed -> "Not copied. ${outcome.reason}"
+    is MoveOutcome.Failed -> "Not moved. ${outcome.reason}"
 
     is MoveOutcome.Unchanged ->
         "It is already in ${outcome.destination} under that name, so nothing was changed."

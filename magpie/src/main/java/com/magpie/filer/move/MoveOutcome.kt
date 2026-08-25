@@ -4,24 +4,32 @@ package com.magpie.filer.move
  * What happened to one file. Every case is something the user is told, in
  * words.
  *
- * There is no "moved" case, because Magpie never moves anything: filing is
- * copying, and the original stays exactly where it was. That is the fail-safe,
- * and it is spelled out in the type so no future code path can quietly assume
- * otherwise.
+ * Filing is a **safe move**: copy first, verify byte counts at both ends, and
+ * only then remove the original. The one thing Magpie ever removes is the
+ * original of a move it has just verified — nothing at the destination, nothing
+ * that failed, nothing it merely suspects. A move whose verification did not
+ * complete leaves the original exactly where it was, and the type says which
+ * happened so no code path can quietly assume otherwise.
  */
 sealed interface MoveOutcome {
 
     val fileName: String
 
-    /** Copied and verified byte-for-byte. The original is still in place. */
+    /** Copied and verified byte-for-byte, then the original removed. */
     data class Copied(
         override val fileName: String,
         val savedAs: String,
         val destination: String,
-        /** Where the original still is, because it was not touched. */
+        /** Where the original was — and still is, when [originalRemoved] is false. */
         val originalPath: String,
         /** The copy's document id, so it can be found again to check on. */
         val document: String,
+        /**
+         * True when the original was removed after verification — a real move.
+         * False when removal failed, which turns the move into a copy: the
+         * verified copy stands and the original is still in place.
+         */
+        val originalRemoved: Boolean = false,
         val notes: List<String> = emptyList(),
     ) : MoveOutcome
 
@@ -53,13 +61,15 @@ sealed interface MoveOutcome {
          * is a duplicate the name alone would never have caught.
          */
         val sameContentAs: String? = null,
+        /** True when the original was removed after the copy verified. */
+        val originalRemoved: Boolean = false,
         val notes: List<String> = emptyList(),
     ) : MoveOutcome {
         /** Whether the name was already taken, as opposed to only the contents. */
         val nameWasTaken: Boolean get() = existingSize != null
     }
 
-    /** Nothing was copied. [reason] says why, plainly. Nothing was deleted. */
+    /** Nothing was moved. [reason] says why, plainly. The original is untouched. */
     data class Failed(
         override val fileName: String,
         val reason: String,

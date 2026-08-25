@@ -6,9 +6,11 @@ package com.magpie.filer.core
  * Two things are guaranteed here, and they are guaranteed by there being no
  * code that could do otherwise rather than by a setting anyone can flip:
  *
- *  - **Magpie never deletes anything.** Not an original, not a copy, not a
- *    folder, not a part-written file of its own. There is no delete call
- *    anywhere in the app. Filing means copying; the original stays where it is.
+ *  - **Magpie removes exactly one thing, ever:** the original of a move it has
+ *    just verified byte for byte. Filing is copy, verify, then remove — a move
+ *    that could not be verified leaves the original untouched. Nothing at a
+ *    destination can be deleted at all: the destination interface has no
+ *    delete method, so there is no call to reach for.
  *  - **Magpie only ever touches ordinary files on your own storage.** Anything
  *    outside the storage volumes Android reports — and the parts of those
  *    volumes that belong to Android and to other apps — is refused before a

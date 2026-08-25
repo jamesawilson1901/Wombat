@@ -1,12 +1,22 @@
 # Magpie
 
-Android app that watches the folders downloads land in. When a file finishes
-arriving, Magpie posts a notification. Tapping it opens the system folder
-picker, offers to tidy the name, and copies the file there — the original is
-never deleted. Anything you do not deal with waits in a list inside the app.
+Android app that sorts your files. It does two jobs:
 
-It exists because Android gives you no way to intercept a browser download and
-ask where to save it. Magpie catches the file a second after it lands instead.
+**The big clean-up.** Years of photos, videos and documents piled up in
+Downloads, DCIM and the memory card, under names like `IMG_20190312_0001.jpg`.
+One button — **Sort it all** — sweeps the lot: your rules decide what they can,
+Claude names the rest and picks or creates the folder each thing belongs in,
+runs of files from one event stay together, and everything is moved into place
+while you watch the counter. A move is always copy → verify byte for byte →
+only then remove the original, so a bad decision can misplace a file but
+nothing can ever destroy one.
+
+**The daily catch.** Magpie watches the folders downloads land in. When a file
+finishes arriving it posts a notification; tapping it offers a name, and the
+name decides the folder. Anything you do not deal with waits in a list inside
+the app. It exists because Android gives you no way to intercept a browser
+download and ask where to save it — Magpie catches the file a second after it
+lands instead.
 
 Package: `com.magpie.filer`. Second app in this repo — Wombat (`:app`) is
 unrelated and untouched.
@@ -96,32 +106,12 @@ If a lot of files turn up at once, all of them go on the waiting list but only
 the first five in each sweep get a notification. Coming back from a day of being
 killed should not bury your notification shade.
 
-## The fail-safe: Magpie never deletes anything
+## The fail-safe: the safe move
 
-**There is no delete call anywhere in this app.** Not for your original, not for
-a copy of its own that failed halfway, not for a folder, not for anything. This
-is not a setting and there is no switch for it — the capability is simply not in
-the code, and `MoveOutcome` has no "moved" case for a future change to reach
-for.
-
-What that means in practice:
-
-- **Filing means copying.** The original stays exactly where it was. After a
-  file is filed it comes off the waiting list, because you have dealt with it,
-  and the report tells you the full path where the original still sits so you
-  can remove it yourself once you are happy with the copy.
-- **Nothing is ever written over.** If something of that name is already in the
-  folder you chose, the copy goes into a `Duplicates` folder inside it instead —
-  see below.
-- **A failed copy is left where it fell.** If a check fails, the part-written
-  file stays in the destination and you are told its exact name and folder.
-  Removing it would be a delete, so Magpie will not do it for you.
-
-The cost of this is real and worth stating: **your Downloads folder does not
-empty itself.** Magpie tells you what it copied and where the original is, and
-clearing up is yours to do. That is the trade the fail-safe buys.
-
-### What is copied, and how it is checked
+Magpie moves your files — they end up in the new folder and are gone from the
+old one — but a move here is never a rename and never a leap of faith. It is
+**copy, verify, and only then remove the original**, and the removal is the
+only removal in the entire app:
 
 1. Both ends are put through the safety check below — before a single byte is
    read.
@@ -130,8 +120,25 @@ clearing up is yours to do. That is the trade the fail-safe buys.
 4. Three things are checked: the number of bytes written matches the source, the
    size the destination reports back matches the source, and the source has not
    changed size while the copy was running.
+5. Only when every one of those has passed is the original removed. This is the
+   single place Magpie removes anything, and the tests pin both that it happens
+   strictly after verification and that no failure path can reach it.
 
-Any check failing is reported with the reason, and nothing anywhere is removed.
+What that means in practice:
+
+- **A failed move costs you nothing.** If any check fails, the original is
+  untouched, exactly where it was, and the report says what happened. A
+  part-written file at the destination is left where it fell and named, because
+  Magpie cannot delete anything at a destination — the storage interface it
+  writes through has no delete method at all, which a test enforces.
+- **Nothing is ever written over.** If something of that name is already in the
+  folder, the file goes into a `Duplicates` folder inside it instead — see
+  below.
+- **A removal that fails downgrades to a copy.** Verified copy in place,
+  original still there, both listed under Safe to clear so you can finish the
+  job yourself. Nothing is retried blindly and nothing is lost.
+- **System files and other apps' files are refused before a byte is read** —
+  the same safety check as always, at both ends of every move.
 
 ## Duplicates
 
@@ -199,6 +206,39 @@ out with `..`, or start with a dot, is refused outright, and illegal characters
 inside an otherwise sensible name are stripped. There is a cap of 300 folders
 and 10 levels, so a stray paste cannot run away.
 
+## Sort it all — the one button
+
+Choose a library folder under Suggestions, tap **Sort everything now**, put the
+phone down. What happens, in order:
+
+1. **The sweep.** Everything in the watched folders and on the waiting list is
+   gathered — no cap. Add every messy folder you want swept under *Folders
+   watched* first (the memory card's folders included); Magpie sorts what is
+   directly inside each one.
+2. **Rules first.** Files matching your rules are moved immediately — free,
+   offline, no request.
+3. **Runs stay together.** Files created close together in time are treated as
+   one event: one name, one folder, numbered in order (`SPRING_WALK_01.jpg`…).
+   A run is never split across two requests, so it cannot scatter.
+4. **Claude decides the rest**, batch after batch until everything has an
+   answer. It sees names, types, sizes and dates — never contents — and picks
+   from your library's folders, or **names a new folder** when nothing existing
+   fits. New folders are created on the spot, so the sort can build the
+   organisation rather than only fill it.
+5. **Everything is moved as decisions arrive** — the same safe move as
+   everywhere else: copy, verify, then remove the original. Duplicates divert
+   to `Duplicates`; anything undecidable stays put with a reason.
+
+The card shows the counter climbing and one **Stop** button — it finishes the
+file it is on and goes no further, and running it again later just carries on
+with whatever is left. At the end: how many moved, which folders were created,
+what was left alone and why.
+
+Keep the app open while it runs — ColorOS kills backgrounded apps, and the
+sort stops where it stood (nothing is lost; tap again to continue). What each
+file costs is a line of metadata in one batched request; a thousand files is a
+few dozen requests.
+
 ## Sorting the backlog by when things happened
 
 The problem this solves: deciding where each file goes **one file at a time**
@@ -211,7 +251,7 @@ things happened, so one event is one decision. Everything in a run shares a
 destination and a name, and a run therefore cannot scatter — not because the
 deciding got cleverer, but because there is only one decision left to make.
 
-**Nothing is sent anywhere and nothing is copied** until you file a run. The
+**Nothing is sent anywhere and nothing is moved** until you file a run. The
 grouping is arithmetic on timestamps: free, instant, the same answer every
 time, and it works with the phone in aeroplane mode.
 
@@ -241,13 +281,15 @@ review step exists, and it costs nothing to use.
 
 ## Safe to clear
 
-The fail-safe means Downloads never empties itself, and the only thing between
-you and clearing it is knowing which files are redundant. Magpie knows.
+A finished move leaves nothing behind, so most of the time this list is empty.
+It exists for the one awkward case: a move whose copy verified byte for byte
+but whose original could not be removed afterwards — Android refused, the file
+was held open, the folder went read-only. Both copies exist at that point, and
+this list is exactly the list of those originals.
 
-**Safe to clear** lists every original that has a copy Magpie checked byte for
-byte, with where the copy went and the original's full path. Magpie still never
-removes anything — you do, in your file manager — but it stops being the only
-one who knows which files are safe to go.
+**Safe to clear** shows each one with where its verified copy went and the
+original's full path. Magpie has already proved the copy is sound; removing the
+leftover is yours to do, in your file manager.
 
 Opening the list re-checks every entry, because a list that says "safe to
 clear" has to be right or it is worse than useless. An original you have
@@ -399,17 +441,27 @@ anything that matters. Then try one onto the SD card.
 - **Filing is tested end to end, with real bytes on real disk.** The Storage
   Access Framework sits behind `DocumentStore`, so `Filing.kt` — every decision
   filing makes — runs against a store backed by a temporary directory.
-  `FilingTest.kt` (20 cases) covers the duplicate path, the size and byte-count
-  checks, a truncated write, a folder that will not list itself, one that
-  refuses to create anything, one that renames what it is given, and one that
-  will not report a size. Every one of those asserts the original is still on
-  disk afterwards. Plus `SafetyTest.kt` (15 cases) on the path rules. All 35
-  run on CI on every push.
-- **The no-delete fail-safe is structural, not just tested.** `DocumentStore`
-  has no delete method, so filing code cannot delete — there is nothing to
-  call. `grep -rn "\.delete()\|deleteDocument" magpie/src/main` returns
-  nothing. A test reflects over the interface and fails if anyone ever adds
-  one.
+  `FilingTest.kt` covers the duplicate path, the size and byte-count checks, a
+  truncated write, a folder that will not list itself, one that refuses to
+  create anything, one that renames what it is given, and one that will not
+  report a size — and now the move itself: that the original is removed only
+  after every verification has passed, that no failure path ever attempts the
+  removal, and that a removal which fails degrades to a copy with both files
+  intact. Plus `SafetyTest.kt` on the path rules.
+- **Half the fail-safe is structural, not just tested.** `DocumentStore` has no
+  delete method, so nothing at a destination can ever be deleted — there is
+  nothing to call, and a test reflects over the interface and fails if anyone
+  ever adds one. The one removal in the app — the original of a verified move —
+  is a parameter of `Filing.file`, so the tests can prove when it runs and when
+  it cannot.
+- **The big sort's planning is tested without a phone** (`BigSortTest.kt`):
+  rules winning before anything is asked, runs forming by time and never being
+  split across batches, and the vetting of folder names Claude proposes.
+  `FolderScopeTest.kt` proves a whole filing lands inside a library subfolder —
+  Duplicates and all — without leaking into the root, and `SortManyTest.kt`
+  runs the batch request against a local HTTP server: files and runs in one
+  body, answers matched by name never position, extensions surviving whatever
+  Claude said, and a new folder name passing through for the planner to vet.
 - **The SAF glue is tested against a real `DocumentsProvider`**, run under
   Robolectric with the provider backed by a temporary directory
   (`SafDocumentStoreTest.kt`, 18 cases). Tree URIs, document ids, cursors and

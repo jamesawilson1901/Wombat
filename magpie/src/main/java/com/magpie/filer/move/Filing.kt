@@ -15,9 +15,12 @@ import java.io.IOException
  * against a [DocumentStore] backed by a temporary directory, on every CI run,
  * without a phone.
  *
- * **Nothing here deletes.** There is no call to reach for: [DocumentStore] has
- * no delete method, so the fail-safe holds by construction rather than by
- * everyone remembering.
+ * Filing is a **safe move**: copy, verify, and only then remove the original.
+ * The removal happens in exactly one place, [file], strictly after every
+ * verification has passed, and only ever to the source file itself. Nothing at
+ * the destination can be deleted from here at all — [DocumentStore] has no
+ * delete method, so that half of the fail-safe holds by construction rather
+ * than by everyone remembering.
  */
 object Filing {
 
@@ -29,6 +32,13 @@ object Filing {
      */
     const val SPACE_MARGIN_BYTES = 8L * 1024 * 1024
 
+    /**
+     * [removeSource] removes the original after the copy has verified; it
+     * returns whether the file is actually gone. It is a parameter so tests can
+     * prove both that it runs after verification and that it never runs when
+     * verification fails — and so a caller that genuinely wants a plain copy
+     * can pass `{ false }`.
+     */
     fun file(
         source: File,
         originalName: String,
@@ -37,6 +47,7 @@ object Filing {
         volumes: List<String>,
         destinationFolder: File?,
         freeSpaceOf: (File) -> Long = { it.usableSpace },
+        removeSource: (File) -> Boolean = { it.delete() },
     ): MoveOutcome {
         val destination = store.label
 
@@ -222,6 +233,24 @@ object Filing {
                 "the name, usually because something with that name was already there."
         }
 
+        // The copy is verified, so the move can complete: the original goes.
+        // This is the only removal in all of Magpie, and everything above this
+        // line has to have succeeded to reach it. If the removal itself fails,
+        // the move gracefully degrades to a copy — both files exist, nothing
+        // is lost, and the report says so.
+        val identical = if (duplicate) identicalTo(source, expected, clash, twin, store) else null
+        val removed = try {
+            removeSource(source)
+        } catch (e: SecurityException) {
+            false
+        }
+        if (!removed) {
+            notes += "The original could not be removed from " +
+                "${source.parentFile?.absolutePath ?: "its folder"}, so this move became a " +
+                "copy: the verified copy is in $landedIn and the original is still where " +
+                "it was."
+        }
+
         return if (!duplicate) {
             MoveOutcome.Copied(
                 fileName = originalName,
@@ -229,6 +258,7 @@ object Filing {
                 destination = destination,
                 originalPath = source.absolutePath,
                 document = created,
+                originalRemoved = removed,
                 notes = notes,
             )
         } else {
@@ -241,8 +271,9 @@ object Filing {
                 existingSize = clash?.size,
                 incomingSize = expected,
                 document = created,
-                identical = identicalTo(source, expected, clash, twin, store),
+                identical = identical,
                 sameContentAs = twin,
+                originalRemoved = removed,
                 notes = notes,
             )
         }
@@ -308,13 +339,13 @@ object Filing {
 
     /**
      * The sentence appended to every failure that happened after a document was
-     * created. Magpie does not remove the part-written file, because it does not
-     * remove anything — so it says where it is instead.
+     * created. Magpie cannot remove the part-written file — nothing at a
+     * destination can be deleted from here — so it says where it is instead.
      */
     private fun leftBehind(destination: String, targetName: String): String =
-        " An incomplete \"$targetName\" is now in $destination. Magpie never deletes " +
-            "anything, so remove it yourself if you do not want it. Your original is " +
-            "untouched, exactly where it was."
+        " An incomplete \"$targetName\" is now in $destination; remove it yourself if " +
+            "you do not want it. Magpie only ever removes an original after its move " +
+            "has verified, so yours is untouched, exactly where it was."
 
     /**
      * Run a store operation, keeping the exception rather than swallowing it.

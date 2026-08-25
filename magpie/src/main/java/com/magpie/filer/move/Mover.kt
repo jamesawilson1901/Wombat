@@ -15,8 +15,8 @@ import kotlinx.coroutines.withContext
  * [Filing], which does the deciding and is tested. The SAF calls themselves
  * live in [SafDocumentStore].
  *
- * **Nothing here deletes.** Filing is a copy: the original stays exactly where
- * it was, whether the copy worked or not.
+ * Filing is a safe move: copy, verify, and only then remove the original. A
+ * move that could not be verified leaves the original exactly where it was.
  */
 class Mover(private val context: Context) {
 
