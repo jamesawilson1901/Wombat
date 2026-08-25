@@ -219,15 +219,26 @@ What that means in practice: the first thing to try is one small file, into a
 folder on internal storage, and check the copy arrived before trusting it with
 anything that matters. Then try one onto the SD card.
 
-- **The no-delete fail-safe is the one thing here that is structurally
-  guaranteed rather than merely tested.** It holds because there is no delete
-  call to go wrong: `grep -rn "delete" magpie/src/main` finds comments and
-  message text, and no call. The path rules that go with it are unit tested
-  (`SafetyTest.kt`, 15 cases) and those tests do run on CI.
-- **Duplicate handling has never been run.** Listing a folder before writing,
-  finding-or-creating `Duplicates`, and the size comparison are all new and
-  compile-checked only. The failure mode to watch for is a storage provider that
-  will not list children, which is refused rather than written into blindly.
+- **Filing is tested end to end, with real bytes on real disk.** The Storage
+  Access Framework sits behind `DocumentStore`, so `Filing.kt` — every decision
+  filing makes — runs against a store backed by a temporary directory.
+  `FilingTest.kt` (20 cases) covers the duplicate path, the size and byte-count
+  checks, a truncated write, a folder that will not list itself, one that
+  refuses to create anything, one that renames what it is given, and one that
+  will not report a size. Every one of those asserts the original is still on
+  disk afterwards. Plus `SafetyTest.kt` (15 cases) on the path rules. All 35
+  run on CI on every push.
+- **The no-delete fail-safe is structural, not just tested.** `DocumentStore`
+  has no delete method, so filing code cannot delete — there is nothing to
+  call. `grep -rn "\.delete()\|deleteDocument" magpie/src/main` returns
+  nothing. A test reflects over the interface and fails if anyone ever adds
+  one.
+- **What is still untested is the SAF glue itself** — `SafDocumentStore.kt`,
+  about a hundred lines where each method is one `DocumentsContract` call and
+  no decisions. It is deliberately thin so that the part that cannot be tested
+  is also not the part that thinks. A provider that behaves unlike the fake is
+  the remaining risk, which is why the fake can be told to misbehave in the
+  four ways real ones do.
 - **No request has ever been made to Anthropic from this code.** The suggestion
   path compiles, and the SDK call is built against the published API, but it has
   not been run once — not on a device, not on a desktop, not with a real key.
@@ -293,8 +304,11 @@ gradle :magpie:testDebugUnitTest
 minSdk 30 (all-files access needs API 30), targetSdk 35, compileSdk 36,
 Kotlin 2.2, AGP 8.11, Compose BOM 2025.06.01.
 
-Unit tests cover the parts worth testing without a device: filename tidying and
-suggestion building, size and file-type wording, and the finished-arriving rule.
+Unit tests cover the parts worth testing without a device: filing end to end
+against a `DocumentStore` backed by a temporary directory (duplicates,
+verification, and the no-delete guarantee), the path safety rules, filename
+tidying and suggestion building, size and file-type wording, and the
+finished-arriving rule.
 
 ### Checking the Anthropic call without a full build
 
