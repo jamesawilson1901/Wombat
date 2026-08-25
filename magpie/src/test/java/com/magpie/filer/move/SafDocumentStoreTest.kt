@@ -65,8 +65,10 @@ class SafDocumentStoreTest {
             writePermission = Manifest.permission.MANAGE_DOCUMENTS
         }
         Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(info)
-        // A tree URI whose tree document id is "" — the root of the provider.
-        treeUri = DocumentsContract.buildTreeDocumentUri(TestDocumentsProvider.AUTHORITY, "")
+        treeUri = DocumentsContract.buildTreeDocumentUri(
+            TestDocumentsProvider.AUTHORITY,
+            TestDocumentsProvider.ROOT_ID,
+        )
         store = SafDocumentStore(context, treeUri, "Papers")
     }
 

@@ -17,13 +17,21 @@ import java.io.FileNotFoundException
  * and `openFileDescriptor` all take their real code paths, and
  * [SafDocumentStore] is exercised as written rather than described.
  *
- * A document id is a path relative to [root]; the empty string is the root
- * itself, which is what a tree URI resolves to.
+ * A document id is [ROOT_ID] for the root itself, and "root/<relative path>"
+ * for everything inside it.
  */
 class TestDocumentsProvider : DocumentsProvider() {
 
     companion object {
         const val AUTHORITY = "com.magpie.filer.test.documents"
+
+        /**
+         * The document id of the root. It has to be something: a tree URI with
+         * an empty document id gives "content://authority/tree/", which
+         * DocumentsContract cannot parse, and every call throws
+         * IllegalArgumentException. Real providers always name their root.
+         */
+        const val ROOT_ID = "root"
 
         /** Set before the provider is created; every instance shares it. */
         @Volatile
@@ -66,10 +74,14 @@ class TestDocumentsProvider : DocumentsProvider() {
     private val base: File get() = requireNotNull(root) { "TestDocumentsProvider.root not set" }
 
     private fun fileFor(documentId: String): File =
-        if (documentId.isEmpty()) base else File(base, documentId)
+        if (documentId == ROOT_ID) base else File(base, documentId.removePrefix("$ROOT_ID/"))
 
     private fun idFor(file: File): String =
-        file.relativeTo(base).path.replace(File.separatorChar, '/')
+        if (file.absolutePath == base.absolutePath) {
+            ROOT_ID
+        } else {
+            "$ROOT_ID/" + file.relativeTo(base).path.replace(File.separatorChar, '/')
+        }
 
     override fun onCreate(): Boolean = true
 
