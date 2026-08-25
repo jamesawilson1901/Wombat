@@ -45,12 +45,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -71,6 +76,8 @@ import com.magpie.filer.move.Filed
 import com.magpie.filer.move.MoveOutcome
 import com.magpie.filer.ui.theme.SectionLabel
 import com.magpie.filer.watch.SpottedFile
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.magpie.filer.watch.SuggestionSettings
 
 @Composable
@@ -1127,6 +1134,18 @@ private fun GroupCard(
     var open by rememberSaveable(group.files.first().path) { mutableStateOf(false) }
     val zone = remember { java.time.ZoneId.systemDefault() }
 
+    // First, middle and last of the run: enough to recognise an event without
+    // opening anything. Decoded off the main thread, locally, or not at all.
+    val representatives = remember(group.files.first().path, group.size) {
+        listOf(group.files.first(), group.files[group.size / 2], group.files.last())
+            .distinctBy { it.path }
+    }
+    val thumbs by produceState(emptyList<ImageBitmap>(), representatives) {
+        value = withContext(Dispatchers.IO) {
+            representatives.mapNotNull { Thumbs.of(it)?.asImageBitmap() }
+        }
+    }
+
     Card(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer
@@ -1143,6 +1162,20 @@ private fun GroupCard(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (thumbs.isNotEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (thumb in thumbs) {
+                        Image(
+                            bitmap = thumb,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .size(64.dp)
+                                .clip(MaterialTheme.shapes.small),
+                        )
+                    }
+                }
+            }
             Text(
                 text = group.files.take(3).joinToString(", ") { it.name } +
                     if (group.size > 3) ", and ${group.size - 3} more" else "",
