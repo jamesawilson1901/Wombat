@@ -66,6 +66,7 @@ import com.magpie.filer.R
 import com.magpie.filer.core.Formatting
 import com.magpie.filer.core.Grouping
 import com.magpie.filer.core.Naming
+import com.magpie.filer.ai.FilingSuggestion
 import com.magpie.filer.ai.Rule
 import com.magpie.filer.ai.Rules
 import com.magpie.filer.core.PlanResult
@@ -100,6 +101,8 @@ fun MagpieScreen(viewModel: MainViewModel) {
     val buildingAt by viewModel.buildingAt.collectAsState()
     val groups by viewModel.groups.collectAsState()
     val groupGap by viewModel.groupGapMinutes.collectAsState()
+    val runSuggestions by viewModel.runSuggestions.collectAsState()
+    val askingRuns by viewModel.askingRuns.collectAsState()
     val suggestionSettings by viewModel.suggestionSettings.collectAsState()
 
     val context = LocalContext.current
@@ -199,6 +202,7 @@ fun MagpieScreen(viewModel: MainViewModel) {
                     settings = suggestionSettings,
                     onKeyChange = viewModel::setApiKey,
                     onEnabledChange = viewModel::setSuggestionsEnabled,
+                    onVisionChange = viewModel::setVisionEnabled,
                     onPickLibrary = { libraryPicker.launch(suggestionSettings.library) },
                     onClearLibrary = { viewModel.setLibrary(null) },
                 )
@@ -346,10 +350,19 @@ fun MagpieScreen(viewModel: MainViewModel) {
                     }
                 } else {
                     itemsIndexed(groups) { index, group ->
+                        val key = group.files.first().path
+                        val suggestion = runSuggestions[key]
                         GroupCard(
                             group = group,
                             canMerge = index < groups.size - 1,
-                            onFile = { stem -> viewModel.fileGroup(index, stem) },
+                            suggestion = suggestion,
+                            asking = key in askingRuns,
+                            onAsk = if (suggestionSettings.visionUsable) {
+                                { viewModel.suggestRunName(index) }
+                            } else null,
+                            onFile = { stem ->
+                                viewModel.fileGroup(index, stem, suggestion?.folder?.ifBlank { null })
+                            },
                             onMerge = { viewModel.mergeGroup(index) },
                             onSplit = { at -> viewModel.splitGroup(index, at) },
                             onDrop = { viewModel.dropGroup(index) },
@@ -835,6 +848,7 @@ private fun SuggestionsCard(
     settings: SuggestionSettings,
     onKeyChange: (String) -> Unit,
     onEnabledChange: (Boolean) -> Unit,
+    onVisionChange: (Boolean) -> Unit,
     onPickLibrary: () -> Unit,
     onClearLibrary: () -> Unit,
 ) {
@@ -923,6 +937,29 @@ private fun SuggestionsCard(
                     if (libraryName != null) {
                         TextButton(onClick = onClearLibrary) { Text("Clear") }
                     }
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "Let Claude look at runs",
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        Text(
+                            text = "This crosses a line nothing else does. When you tap Ask " +
+                                "Claude on a backlog run, three snapshots from it — single " +
+                                "frames, shrunk to 512 pixels — are sent so the run can be " +
+                                "named by what it actually is. Never the files themselves, " +
+                                "never without your tap, and with this off no part of any " +
+                                "file's contents ever leaves the phone.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Switch(checked = settings.vision, onCheckedChange = onVisionChange)
                 }
             }
         }
@@ -1125,6 +1162,9 @@ private fun gapWords(minutes: Long): String = when {
 private fun GroupCard(
     group: TimeGroup,
     canMerge: Boolean,
+    suggestion: FilingSuggestion?,
+    asking: Boolean,
+    onAsk: (() -> Unit)?,
     onFile: (String) -> Unit,
     onMerge: () -> Unit,
     onSplit: (Int) -> Unit,
@@ -1132,6 +1172,11 @@ private fun GroupCard(
 ) {
     var stem by rememberSaveable(group.files.first().path) { mutableStateOf("") }
     var open by rememberSaveable(group.files.first().path) { mutableStateOf(false) }
+
+    // Claude's stem fills an empty box and never overwrites what you typed.
+    LaunchedEffect(suggestion) {
+        if (suggestion != null && stem.isBlank()) stem = suggestion.name
+    }
     val zone = remember { java.time.ZoneId.systemDefault() }
 
     // First, middle and last of the run: enough to recognise an event without
@@ -1210,9 +1255,30 @@ private fun GroupCard(
                 )
             }
 
+            if (suggestion != null) {
+                Text(
+                    text = buildString {
+                        append("Claude suggests ").append(suggestion.name)
+                        if (suggestion.folder.isNotBlank()) {
+                            append(" → ").append(suggestion.folder)
+                        }
+                        if (suggestion.reason.isNotBlank()) {
+                            append(". ").append(suggestion.reason)
+                        }
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { onFile(stem) }, enabled = stem.isNotBlank()) {
                     Text("File this run")
+                }
+                if (onAsk != null) {
+                    TextButton(onClick = onAsk, enabled = !asking) {
+                        Text(if (asking) "Asking…" else "Ask Claude")
+                    }
                 }
                 if (canMerge) {
                     TextButton(onClick = onMerge) { Text("Join next") }

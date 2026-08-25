@@ -478,6 +478,111 @@ class SuggesterTest {
         assertEquals(0, server.requestCount)
     }
 
+    // ---- asking about a run, with snapshots --------------------------------
+
+    private fun askRun(
+        snapshots: List<String> = listOf("c25hcDE=", "c25hcDI=", "c25hcDM="),
+        folders: List<String> = listOf("01_CHARACTER_MASTERS", "02_LOCATION_MASTERS"),
+    ): SuggestionResult = runBlocking {
+        Suggester.suggestRun(
+            snapshots = snapshots,
+            count = 34,
+            range = "15 June 2024, 14:02\u201317:41",
+            folders = folders,
+            apiKey = "sk-ant-x",
+            baseUrl = baseUrl,
+        )
+    }
+
+    @Test
+    fun `a run request carries the snapshots as jpeg image blocks`() {
+        replyWith("""{"name":"ARRIVAL_STILLS","folder":"01_CHARACTER_MASTERS","reason":"Portraits."}""")
+
+        val result = askRun()
+        val body = requireNotNull(server.takeRequest(2, TimeUnit.SECONDS)?.body?.readUtf8())
+
+        assertTrue(result.toString(), result is SuggestionResult.Ready)
+        val content = JSONObject(body).getJSONArray("messages")
+            .getJSONObject(0).getJSONArray("content")
+        val types = (0 until content.length()).map { content.getJSONObject(it).getString("type") }
+        assertEquals(listOf("image", "image", "image", "text"), types)
+        val source = content.getJSONObject(0).getJSONObject("source")
+        assertEquals("base64", source.getString("type"))
+        assertEquals("image/jpeg", source.getString("media_type"))
+        assertEquals("c25hcDE=", source.getString("data"))
+        // The date range and count travel as text alongside the snapshots.
+        val text = content.getJSONObject(3).getString("text")
+        assertTrue(text, text.contains("34 files"))
+        assertTrue(text, text.contains("15 June 2024"))
+        assertTrue(text, text.contains("01_CHARACTER_MASTERS"))
+    }
+
+    @Test
+    fun `a run answer comes back as stem, folder and reason`() {
+        replyWith("""{"name":"TOWN_REFS","folder":"02_LOCATION_MASTERS","reason":"Street scenes."}""")
+
+        val result = askRun() as SuggestionResult.Ready
+
+        assertEquals("TOWN_REFS", result.suggestion.name)
+        assertEquals("02_LOCATION_MASTERS", result.suggestion.folder)
+    }
+
+    @Test
+    fun `a run stem is cleaned and stripped of any extension`() {
+        replyWith("""{"name":"../ARRIVAL: STILLS.png","folder":"","reason":"x"}""")
+
+        val stem = (askRun() as SuggestionResult.Ready).suggestion.name
+
+        assertFalse(stem, stem.contains("/"))
+        assertFalse(stem, stem.contains(":"))
+        assertFalse(stem, stem.endsWith(".png"))
+    }
+
+    @Test
+    fun `no snapshots means no request at all`() {
+        val result = askRun(snapshots = emptyList())
+
+        assertTrue(result.toString(), result is SuggestionResult.Failed)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `at most three snapshots are ever sent`() {
+        replyWith("""{"name":"X","folder":"","reason":"x"}""")
+
+        askRun(snapshots = listOf("YQ==", "Yg==", "Yw==", "ZA==", "ZQ=="))
+        val body = requireNotNull(server.takeRequest(2, TimeUnit.SECONDS)?.body?.readUtf8())
+
+        val content = JSONObject(body).getJSONArray("messages")
+            .getJSONObject(0).getJSONArray("content")
+        val images = (0 until content.length())
+            .count { content.getJSONObject(it).getString("type") == "image" }
+        assertEquals(3, images)
+    }
+
+    @Test
+    fun `a run refusal is a sentence, not a crash`() {
+        replyWith(
+            """{"name":"X","folder":"","reason":"x"}""",
+            stopDetails = """{"type":"refusal","category":"other"}""",
+        )
+
+        val result = askRun()
+
+        assertTrue(result.toString(), result is SuggestionResult.Failed)
+        assertTrue((result as SuggestionResult.Failed).reason.contains("declined"))
+    }
+
+    @Test
+    fun `a run stem with nothing usable left is a failure, not an empty name`() {
+        replyWith("""{"name":"***","folder":"","reason":"x"}""")
+
+        val result = askRun()
+
+        assertTrue(result.toString(), result is SuggestionResult.Failed)
+        assertTrue((result as SuggestionResult.Failed).reason.contains("nothing usable"))
+    }
+
     @Test
     fun `a failure never throws out of the suggester`() {
         // Whatever happens, the caller gets a sentence, because filing carries

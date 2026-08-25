@@ -589,6 +589,36 @@ inside it — the same rule the local tidying follows. If it guesses at any of
 those from the name alone, it is guessing, and the one-line reason is there so
 you can see whether it was.
 
+### Letting Claude look at a run — the one exception, off by default
+
+Everything above sends metadata only. There is now one deliberate, opt-in
+exception, and it gets its own switch precisely because it crosses that line:
+**Let Claude look at runs.**
+
+With it on, tapping *Ask Claude* on a backlog run sends **three snapshots** —
+the first, middle and last of the run, each a single frame shrunk to 512 pixels
+and recompressed — together with the run's size and date range and your folder
+names. One answer comes back for the whole run: a stem, a folder, a sentence.
+Because it is one answer for the run, it cannot scatter an event across
+folders, which is the failure per-file classification suffers.
+
+Plainly, what this does and does not do:
+
+- **Never the files themselves.** Only the three snapshots, at a size that
+  shows what kind of thing a frame is but cannot reproduce the artwork or read
+  fine text. For video it is a single frame — the scene, nothing of the motion.
+- **Never without your tap.** No request happens in the background, ever. Each
+  tap is one request.
+- **Off means off.** With the switch off — the state it installs in — no part
+  of any file's contents ever leaves the phone, exactly as before.
+- **The answer is distrusted like any other.** The stem is cleaned like a typed
+  name, any extension is cut off, an invented folder is discarded, and Claude
+  is instructed never to identify a person — it names the kind of run, not who
+  is in it. It also cannot tell you *which* character a reference is; that
+  stays yours to type.
+- **Cost:** three 512-pixel snapshots are roughly a thousand input tokens —
+  around half a cent per run on `claude-opus-5`, billed to your own key.
+
 ## Working offline
 
 With suggestions switched off — the state it installs in — Magpie makes no

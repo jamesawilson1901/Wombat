@@ -12,10 +12,12 @@ import com.magpie.filer.ai.LibraryFolder
 import com.magpie.filer.ai.LibraryFolders
 import com.magpie.filer.ai.LibraryListing
 import com.magpie.filer.ai.Rule
+import com.magpie.filer.ai.Snapshots
 import com.magpie.filer.ai.Rules
 import com.magpie.filer.ai.FilingSuggestion as Suggestion
 import com.magpie.filer.ai.SuggestionResult
 import com.magpie.filer.ai.Suggester
+import com.magpie.filer.core.Formatting
 import com.magpie.filer.core.FolderPlan
 import com.magpie.filer.core.Grouping
 import com.magpie.filer.core.TimeGroup
@@ -263,6 +265,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setApiKey(key: String) = store.setApiKey(key)
 
     fun setSuggestionsEnabled(on: Boolean) = store.setSuggestionsEnabled(on)
+
+    fun setVisionEnabled(on: Boolean) = store.setVisionEnabled(on)
 
     /** Remember the folder whose subfolders Claude is allowed to choose between. */
     fun setLibrary(tree: Uri?) {
@@ -968,7 +972,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * order. One destination and one name for the run, which is the entire
      * point: a group cannot scatter because there is only one decision.
      */
-    fun fileGroup(index: Int, stem: String) {
+    fun fileGroup(index: Int, stem: String, folderName: String? = null) {
         val group = _groups.value.getOrNull(index) ?: return
         if (_step.value !is FilingStep.Idle) {
             store.report("Magpie is already filing something. Finish that first.")
@@ -982,16 +986,84 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         pendingGroupNames = names
-        // A rule matching the group's name puts the picker at the right folder,
-        // exactly as it does for a single file.
+        // Claude's suggested folder, when there is one, or a rule matching the
+        // run's name — either way the picker opens at the right place and the
+        // user still confirms.
         val rule = Rules.match(names.values.first(), store.rules.value)
         scope.launch {
-            val at = rule?.let { folderUriFor(it.folder) }
+            val at = folderName?.let { folderUriFor(it) } ?: rule?.let { folderUriFor(it.folder) }
             _step.value = FilingStep.ChooseFolder(
                 token = nextToken++,
                 files = group.files,
                 openAt = at ?: lastDestination,
             )
+        }
+    }
+
+    /** Claude's answer per run, keyed by the run's first file. */
+    private val _runSuggestions = MutableStateFlow<Map<String, Suggestion>>(emptyMap())
+    val runSuggestions: StateFlow<Map<String, Suggestion>> = _runSuggestions.asStateFlow()
+
+    /** Runs currently being asked about, so the card can show it is busy. */
+    private val _askingRuns = MutableStateFlow<Set<String>>(emptySet())
+    val askingRuns: StateFlow<Set<String>> = _askingRuns.asStateFlow()
+
+    /**
+     * Show Claude a few snapshots from a run and get one stem and one folder
+     * for the whole thing. Only ever on the user's tap, only with the vision
+     * switch on, and only the first, middle and last frames at 512 pixels —
+     * never the files themselves.
+     */
+    fun suggestRunName(index: Int) {
+        val settings = store.suggestions.value
+        if (!settings.visionUsable) {
+            store.report("Turn on Let Claude look at runs, and save an API key, first.")
+            return
+        }
+        val group = _groups.value.getOrNull(index) ?: return
+        val key = group.files.first().path
+        if (key in _askingRuns.value) return
+
+        _askingRuns.value = _askingRuns.value + key
+        scope.launch {
+            try {
+                val representatives = listOf(
+                    group.files.first(),
+                    group.files[group.size / 2],
+                    group.files.last(),
+                ).distinctBy { it.path }
+
+                val snapshots = withContext(Dispatchers.IO) {
+                    representatives.mapNotNull { Snapshots.of(it) }
+                }
+                val folders = settings.library?.let { lib ->
+                    when (val listing = withContext(Dispatchers.IO) { LibraryFolders.list(app, lib) }) {
+                        is LibraryListing.Folders -> listing.folders.map { it.name }
+                        is LibraryListing.Failed -> {
+                            store.report(listing.reason)
+                            emptyList()
+                        }
+                    }
+                }.orEmpty()
+
+                val range = Formatting.timeRange(
+                    group.earliest, group.latest, java.time.ZoneId.systemDefault(),
+                )
+                when (val result = Suggester.suggestRun(
+                    snapshots = snapshots,
+                    count = group.size,
+                    range = range,
+                    folders = folders,
+                    apiKey = settings.apiKey,
+                )) {
+                    is SuggestionResult.Ready ->
+                        _runSuggestions.value = _runSuggestions.value + (key to result.suggestion)
+
+                    is SuggestionResult.Failed -> store.report(result.reason)
+                }
+            } finally {
+                _askingRuns.value = _askingRuns.value - key
+            }
         }
     }
 

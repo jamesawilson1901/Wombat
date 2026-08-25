@@ -8,9 +8,13 @@ import com.anthropic.errors.AnthropicServiceException
 import com.anthropic.errors.BadRequestException
 import com.anthropic.errors.RateLimitException
 import com.anthropic.errors.UnauthorizedException
+import com.anthropic.models.messages.Base64ImageSource
+import com.anthropic.models.messages.ContentBlockParam
+import com.anthropic.models.messages.ImageBlockParam
 import com.anthropic.models.messages.JsonOutputFormat
 import com.anthropic.models.messages.MessageCreateParams
 import com.anthropic.models.messages.OutputConfig
+import com.anthropic.models.messages.TextBlockParam
 import com.magpie.filer.core.Formatting
 import com.magpie.filer.core.Naming
 import com.magpie.filer.watch.SpottedFile
@@ -358,6 +362,168 @@ object Suggester {
             )
         }
         return found
+    }
+
+    private const val RUN_PROMPT =
+        "You help someone name and file a run of files that were created together — " +
+            "generated stills, video tests, photos from one session. You are shown a few " +
+            "small snapshots from the run, how many files it holds, when it happened, and " +
+            "the names of the folders they file things into.\n\n" +
+            "Reply with three things.\n\n" +
+            "name: one short stem for the whole run, in capitals with underscores, like " +
+            "ARRIVAL_STILLS or TOWN_REFS — at most three words, no extension, no numbering. " +
+            "Say what the run is, not what it looks like.\n\n" +
+            "folder: exactly one of the folder names you were given, copied character for " +
+            "character, or an empty string if none of them fits. Never invent one.\n\n" +
+            "reason: one short sentence, at most fifteen words. Never name or identify a " +
+            "person; describe what kind of thing the run is."
+
+    /**
+     * Ask about a whole run at once: a few [snapshots] (base64 JPEG), how many
+     * files the run holds, and when it happened. One answer for the run is the
+     * point — the files were created together, so they belong together, and a
+     * single decision cannot scatter them.
+     *
+     * This is the one call that sends any of a file's contents, and only ever
+     * these snapshots. It exists behind its own switch, off by default.
+     */
+    suspend fun suggestRun(
+        snapshots: List<String>,
+        count: Int,
+        range: String,
+        folders: List<String>,
+        apiKey: String,
+        baseUrl: String? = null,
+    ): SuggestionResult = withContext(Dispatchers.IO) {
+        askRun(snapshots, count, range, folders, apiKey, baseUrl)
+    }
+
+    private fun askRun(
+        snapshots: List<String>,
+        count: Int,
+        range: String,
+        folders: List<String>,
+        apiKey: String,
+        baseUrl: String?,
+    ): SuggestionResult {
+        if (apiKey.isBlank()) {
+            return SuggestionResult.Failed(
+                "There is no API key saved, so Magpie has nothing to ask with."
+            )
+        }
+        if (snapshots.isEmpty()) {
+            return SuggestionResult.Failed(
+                "Nothing in this run could be turned into a snapshot to show Claude."
+            )
+        }
+
+        val question = buildString {
+            append("A run of ").append(count).append(" files, from ").append(range).append(". ")
+            append("The snapshots above are the first, middle and last of it.\n")
+            append("Folders to choose from: ")
+            append(if (folders.isEmpty()) "(none — suggest a name only)" else folders.joinToString(", "))
+        }
+
+        val blocks = ArrayList<ContentBlockParam>(snapshots.size + 1)
+        for (snapshot in snapshots.take(3)) {
+            blocks += ContentBlockParam.ofImage(
+                ImageBlockParam.builder()
+                    .source(
+                        Base64ImageSource.builder()
+                            .mediaType(Base64ImageSource.MediaType.IMAGE_JPEG)
+                            .data(snapshot)
+                            .build()
+                    )
+                    .build()
+            )
+        }
+        blocks += ContentBlockParam.ofText(TextBlockParam.builder().text(question).build())
+
+        val params = MessageCreateParams.builder()
+            .model(MODEL)
+            .maxTokens(MAX_TOKENS)
+            .system(RUN_PROMPT)
+            .outputConfig(
+                OutputConfig.builder()
+                    .effort(OutputConfig.Effort.LOW)
+                    .format(JsonOutputFormat.builder().schema(SCHEMA).build())
+                    .build()
+            )
+            .addUserMessageOfBlockParams(blocks)
+            .build()
+
+        return try {
+            readRun(clientFor(apiKey, baseUrl).messages().create(params))
+        } catch (e: UnauthorizedException) {
+            SuggestionResult.Failed(
+                "Anthropic rejected the API key. Check it in Magpie's settings."
+            )
+        } catch (e: RateLimitException) {
+            SuggestionResult.Failed(
+                "Anthropic is rate limiting this key at the moment. Wait a minute and try again."
+            )
+        } catch (e: AnthropicServiceException) {
+            SuggestionResult.Failed(
+                "Anthropic returned an error (${e.statusCode()}: ${e.message ?: "no detail"})."
+            )
+        } catch (e: AnthropicIoException) {
+            SuggestionResult.Failed(
+                "Could not reach Anthropic (${e.message ?: "no network"}). The run can still " +
+                    "be named and filed by hand."
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            SuggestionResult.Failed(
+                "Asking Claude failed unexpectedly (${e.javaClass.simpleName}: " +
+                    "${e.message ?: "no detail"}). Everything else still works."
+            )
+        }
+    }
+
+    private fun readRun(message: com.anthropic.models.messages.Message): SuggestionResult {
+        val refusal = message.stopDetails().orElse(null)
+        if (refusal != null) {
+            val category = refusal.category().map { it.asString() }.orElse("no reason given")
+            return SuggestionResult.Failed(
+                "Claude declined to look at this run ($category). Name it yourself."
+            )
+        }
+
+        val text = message.content()
+            .mapNotNull { it.text().orElse(null) }
+            .joinToString(separator = "") { it.text() }
+            .trim()
+        if (text.isEmpty()) {
+            return SuggestionResult.Failed("Claude replied with nothing at all. Try again.")
+        }
+
+        val json = try {
+            JSONObject(text)
+        } catch (e: JSONException) {
+            return SuggestionResult.Failed(
+                "Claude's reply was not in the shape Magpie expected " +
+                    "(${e.message ?: "could not read it as JSON"})."
+            )
+        }
+
+        // The stem gets the same distrust a name does: cleaned like a typed
+        // one, and any extension it tried to carry is cut off, because the
+        // run's files each keep their own.
+        val stem = Naming.stem(Naming.sanitise(json.optString("name"))).trim()
+        if (stem.isBlank()) {
+            return SuggestionResult.Failed(
+                "Claude's suggested name had nothing usable left in it. Name the run yourself."
+            )
+        }
+
+        return SuggestionResult.Ready(
+            FilingSuggestion(
+                name = stem,
+                folder = json.optString("folder").trim(),
+                reason = json.optString("reason").trim(),
+            )
+        )
     }
 
     private fun read(

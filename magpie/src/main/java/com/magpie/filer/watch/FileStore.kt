@@ -25,8 +25,16 @@ data class SuggestionSettings(
     val apiKey: String,
     val enabled: Boolean,
     val library: Uri?,
+    /**
+     * Whether Claude may be shown small snapshots from a backlog run when the
+     * user asks about one. Its own switch, off by default, because it crosses
+     * a line the rest of the app never does: with it off, no part of any
+     * file's contents ever leaves the phone.
+     */
+    val vision: Boolean = false,
 ) {
     val usable: Boolean get() = enabled && apiKey.isNotBlank()
+    val visionUsable: Boolean get() = vision && apiKey.isNotBlank()
 }
 
 /**
@@ -66,6 +74,7 @@ class FileStore private constructor(private val prefs: SharedPreferences) {
         private const val KEY_API_KEY = "anthropicApiKey"
         private const val KEY_SUGGESTIONS = "suggestionsEnabled"
         private const val KEY_LIBRARY = "libraryTree"
+        private const val KEY_VISION = "visionEnabled"
 
         /**
          * Only files Magpie has actually offered land here, so this grows with
@@ -308,6 +317,7 @@ class FileStore private constructor(private val prefs: SharedPreferences) {
             apiKey = prefs.getString(KEY_API_KEY, "").orEmpty(),
             enabled = prefs.getBoolean(KEY_SUGGESTIONS, false),
             library = prefs.getString(KEY_LIBRARY, null)?.let(Uri::parse),
+            vision = prefs.getBoolean(KEY_VISION, false),
         )
     )
     val suggestions: StateFlow<SuggestionSettings> = _suggestions.asStateFlow()
@@ -321,6 +331,11 @@ class FileStore private constructor(private val prefs: SharedPreferences) {
         val trimmed = key.trim()
         prefs.edit().putString(KEY_API_KEY, trimmed).apply()
         _suggestions.value = _suggestions.value.copy(apiKey = trimmed)
+    }
+
+    fun setVisionEnabled(on: Boolean) {
+        prefs.edit().putBoolean(KEY_VISION, on).apply()
+        _suggestions.value = _suggestions.value.copy(vision = on)
     }
 
     fun setSuggestionsEnabled(on: Boolean) {
