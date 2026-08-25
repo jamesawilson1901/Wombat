@@ -17,6 +17,8 @@ import com.magpie.filer.ai.FilingSuggestion as Suggestion
 import com.magpie.filer.ai.SuggestionResult
 import com.magpie.filer.ai.Suggester
 import com.magpie.filer.core.FolderPlan
+import com.magpie.filer.core.Grouping
+import com.magpie.filer.core.TimeGroup
 import com.magpie.filer.core.Naming
 import com.magpie.filer.core.PlanResult
 import com.magpie.filer.core.Safety
@@ -30,6 +32,7 @@ import com.magpie.filer.move.Mover
 import com.magpie.filer.watch.FileStore
 import com.magpie.filer.watch.Notifications
 import com.magpie.filer.watch.SpottedFile
+import com.magpie.filer.watch.Taken
 import com.magpie.filer.watch.WatchRoots
 import com.magpie.filer.watch.WatchService
 import java.io.File
@@ -491,6 +494,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         if (uri == null) {
+            pendingGroupNames = emptyMap()
             _step.value = FilingStep.Idle
             return
         }
@@ -511,8 +515,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         // The name was settled before the picker opened, so this is the last
-        // step: prefill carries it, and null means a batch keeping its names.
-        startMoves(pending.files, uri, rename = pending.prefill)
+        // step. A group carries a name per file; a single file carries one in
+        // prefill; a plain batch carries none and every file keeps its own.
+        val names = pendingGroupNames
+        pendingGroupNames = emptyMap()
+        if (names.isNotEmpty()) {
+            startMoves(pending.files, uri, names)
+        } else {
+            startMoves(pending.files, uri, rename = pending.prefill)
+        }
     }
 
     fun confirmRename(newName: String) {
@@ -566,6 +577,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun cancelFiling() {
+        pendingGroupNames = emptyMap()
         _step.value = FilingStep.Idle
     }
 
@@ -574,7 +586,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         stopSelecting()
     }
 
-    private fun startMoves(files: List<SpottedFile>, tree: Uri, rename: String?) {
+    private fun startMoves(files: List<SpottedFile>, tree: Uri, rename: String?) =
+        startMoves(files, tree, if (rename == null) emptyMap() else mapOf(files.first().path to rename))
+
+    /**
+     * [renames] maps a file's path to the name it should be saved under. A file
+     * not in the map keeps its own name, which is what a plain batch does.
+     */
+    private fun startMoves(files: List<SpottedFile>, tree: Uri, renames: Map<String, String>) {
         scope.launch {
             _step.value = FilingStep.Working(
                 if (files.size == 1) "Copying ${files.first().name}…"
@@ -584,7 +603,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val folder = Destinations.folderPath(tree)
             val outcomes = ArrayList<MoveOutcome>(files.size)
             for (file in files) {
-                val outcome = mover.copy(file, tree, rename ?: file.name)
+                val outcome = mover.copy(file, tree, renames[file.path] ?: file.name)
 
                 // Filing into a folder Magpie watches would otherwise have it
                 // spot its own copy a moment later and offer it straight back.
@@ -737,6 +756,98 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun removeWatchedFolder(path: String) = store.removeRoot(path)
+
+    // ---- grouping the backlog ----------------------------------------------
+
+    /** The backlog split into runs, or empty until it has been worked out. */
+    private val _groups = MutableStateFlow<List<TimeGroup>>(emptyList())
+    val groups: StateFlow<List<TimeGroup>> = _groups.asStateFlow()
+
+    /** How long a quiet spell has to be to start a new group, in minutes. */
+    private val _groupGapMinutes = MutableStateFlow(Grouping.DEFAULT_GAP_MILLIS / 60_000)
+    val groupGapMinutes: StateFlow<Long> = _groupGapMinutes.asStateFlow()
+
+    /**
+     * Work out the groups from what is in the watched folders.
+     *
+     * Reading a photo's taken-at time means opening every file, so this happens
+     * off the main thread and only when asked for.
+     */
+    fun regroup() {
+        scope.launch {
+            val found = withContext(Dispatchers.IO) {
+                val files = readInFolders()
+                _inFolders.value = files
+                Grouping.byTime(
+                    files = files,
+                    gap = _groupGapMinutes.value * 60_000,
+                    timeOf = Taken::of,
+                )
+            }
+            _groups.value = found
+        }
+    }
+
+    fun setGroupGapMinutes(minutes: Long) {
+        _groupGapMinutes.value = minutes.coerceIn(1, 72 * 60)
+        if (_groups.value.isNotEmpty()) regroup()
+    }
+
+    /** Join a group with the one after it, when one event spanned a break. */
+    fun mergeGroup(index: Int) {
+        _groups.value = Grouping.merge(_groups.value, index)
+    }
+
+    /** Cut a group in two, when two things shared an afternoon. */
+    fun splitGroup(index: Int, at: Int) {
+        val groups = _groups.value
+        if (index !in groups.indices) return
+        val parts = Grouping.split(groups[index], at, Taken::of)
+        if (parts.size == 1) return
+        _groups.value = groups.subList(0, index) + parts + groups.subList(index + 1, groups.size)
+    }
+
+    /** Take a group off the list without filing it. */
+    fun dropGroup(index: Int) {
+        val groups = _groups.value
+        if (index !in groups.indices) return
+        _groups.value = groups.subList(0, index) + groups.subList(index + 1, groups.size)
+    }
+
+    /**
+     * File a whole group into one folder under one [stem], numbered in time
+     * order. One destination and one name for the run, which is the entire
+     * point: a group cannot scatter because there is only one decision.
+     */
+    fun fileGroup(index: Int, stem: String) {
+        val group = _groups.value.getOrNull(index) ?: return
+        if (_step.value !is FilingStep.Idle) {
+            store.report("Magpie is already filing something. Finish that first.")
+            return
+        }
+        val names = Grouping.numbered(stem, group.files)
+        if (names.isEmpty()) {
+            store.report(
+                "\"$stem\" leaves nothing to name these with. Try another name for the group."
+            )
+            return
+        }
+        pendingGroupNames = names
+        // A rule matching the group's name puts the picker at the right folder,
+        // exactly as it does for a single file.
+        val rule = Rules.match(names.values.first(), store.rules.value)
+        scope.launch {
+            val at = rule?.let { folderUriFor(it.folder) }
+            _step.value = FilingStep.ChooseFolder(
+                token = nextToken++,
+                files = group.files,
+                openAt = at ?: lastDestination,
+            )
+        }
+    }
+
+    /** Names for the group being filed, applied when the folder comes back. */
+    private var pendingGroupNames: Map<String, String> = emptyMap()
 
     // ---- building a folder tree --------------------------------------------
 

@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -58,10 +59,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.magpie.filer.R
 import com.magpie.filer.core.Formatting
+import com.magpie.filer.core.Grouping
 import com.magpie.filer.core.Naming
 import com.magpie.filer.ai.Rule
 import com.magpie.filer.ai.Rules
 import com.magpie.filer.core.PlanResult
+import com.magpie.filer.core.TimeGroup
 import com.magpie.filer.move.BuildReport
 import com.magpie.filer.move.Destinations
 import com.magpie.filer.move.Filed
@@ -88,6 +91,8 @@ fun MagpieScreen(viewModel: MainViewModel) {
     val treePlan by viewModel.treePlan.collectAsState()
     val treeReport by viewModel.treeReport.collectAsState()
     val buildingAt by viewModel.buildingAt.collectAsState()
+    val groups by viewModel.groups.collectAsState()
+    val groupGap by viewModel.groupGapMinutes.collectAsState()
     val suggestionSettings by viewModel.suggestionSettings.collectAsState()
 
     val context = LocalContext.current
@@ -97,6 +102,7 @@ fun MagpieScreen(viewModel: MainViewModel) {
     var showRules by rememberSaveable { mutableStateOf(false) }
     var showFolders by rememberSaveable { mutableStateOf(false) }
     var showBuilder by rememberSaveable { mutableStateOf(false) }
+    var showGroups by rememberSaveable { mutableStateOf(false) }
 
     val folderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -266,6 +272,80 @@ fun MagpieScreen(viewModel: MainViewModel) {
                                 "They are still in their folder, untouched.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
+            item {
+                SectionHeading(
+                    title = if (groups.isEmpty()) "SORT THE BACKLOG" else "SORT THE BACKLOG · ${groups.size}",
+                    action = if (showGroups) "Hide" else "Show",
+                    onAction = {
+                        showGroups = !showGroups
+                        if (showGroups) viewModel.regroup()
+                    },
+                )
+            }
+            if (showGroups) {
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "Files that arrived together almost always belong " +
+                                "together. Magpie puts the backlog into runs by when things " +
+                                "happened, so one event is one decision — file a whole run " +
+                                "into one folder under one name and it cannot end up " +
+                                "scattered across three.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = "A new run starts after ${gapWords(groupGap)} of quiet. " +
+                                "Nothing is sent anywhere and nothing is copied until you " +
+                                "file a run.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            for (minutes in listOf(15L, 60L, 120L, 480L)) {
+                                Surface(
+                                    onClick = { viewModel.setGroupGapMinutes(minutes) },
+                                    color = if (minutes == groupGap) {
+                                        MaterialTheme.colorScheme.secondaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceContainerHigh
+                                    },
+                                    shape = MaterialTheme.shapes.small,
+                                ) {
+                                    Text(
+                                        text = gapWords(minutes),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    )
+                                }
+                            }
+                        }
+                        Button(onClick = viewModel::regroup) { Text("Work out the runs") }
+                    }
+                }
+                if (groups.isEmpty()) {
+                    item {
+                        Text(
+                            text = "No runs yet. Tap Work out the runs to look at what is in " +
+                                "your watched folders.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else {
+                    itemsIndexed(groups) { index, group ->
+                        GroupCard(
+                            group = group,
+                            canMerge = index < groups.size - 1,
+                            onFile = { stem -> viewModel.fileGroup(index, stem) },
+                            onMerge = { viewModel.mergeGroup(index) },
+                            onSplit = { at -> viewModel.splitGroup(index, at) },
+                            onDrop = { viewModel.dropGroup(index) },
                         )
                     }
                 }
@@ -1012,6 +1092,119 @@ private fun BuildReportDialog(report: BuildReport, onDismiss: () -> Unit) {
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
     )
+}
+
+private fun gapWords(minutes: Long): String = when {
+    minutes < 60 -> "$minutes min"
+    minutes % 60 == 0L && minutes < 1440 -> "${minutes / 60} hr"
+    else -> "${minutes / 1440} day"
+}
+
+@Composable
+private fun GroupCard(
+    group: TimeGroup,
+    canMerge: Boolean,
+    onFile: (String) -> Unit,
+    onMerge: () -> Unit,
+    onSplit: (Int) -> Unit,
+    onDrop: () -> Unit,
+) {
+    var stem by rememberSaveable(group.files.first().path) { mutableStateOf("") }
+    var open by rememberSaveable(group.files.first().path) { mutableStateOf(false) }
+    val zone = remember { java.time.ZoneId.systemDefault() }
+
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(
+                text = if (group.size == 1) "1 file" else "${group.size} files",
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Text(
+                text = Formatting.timeRange(group.earliest, group.latest, zone),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = group.files.take(3).joinToString(", ") { it.name } +
+                    if (group.size > 3) ", and ${group.size - 3} more" else "",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+
+            OutlinedTextField(
+                value = stem,
+                onValueChange = { stem = it },
+                singleLine = true,
+                label = { Text("Call this run") },
+                placeholder = { Text("ARRIVAL") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (stem.isNotBlank()) {
+                val preview = Grouping.numbered(stem, group.files)
+                Text(
+                    text = if (preview.isEmpty()) {
+                        "That name leaves nothing to call them."
+                    } else {
+                        "Saved as ${preview.values.first()} … ${preview.values.last()}"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (preview.isEmpty()) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { onFile(stem) }, enabled = stem.isNotBlank()) {
+                    Text("File this run")
+                }
+                if (canMerge) {
+                    TextButton(onClick = onMerge) { Text("Join next") }
+                }
+                TextButton(onClick = onDrop) { Text("Skip") }
+            }
+
+            if (group.size > 1) {
+                TextButton(onClick = { open = !open }) {
+                    Text(if (open) "Hide files" else "Split it")
+                }
+            }
+            if (open) {
+                Text(
+                    text = "Tap where the run should be cut. Everything from that file on " +
+                        "becomes a second run.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                for ((position, file) in group.files.withIndex()) {
+                    if (position == 0) continue
+                    Surface(
+                        onClick = { onSplit(position) },
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text = "Cut before ${file.name}",
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ---- dialogs ---------------------------------------------------------------

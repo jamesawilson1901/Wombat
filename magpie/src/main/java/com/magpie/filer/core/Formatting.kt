@@ -155,4 +155,28 @@ object Formatting {
         "pptx" to "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "odp" to "application/vnd.oasis.opendocument.presentation",
     )
+
+    /**
+     * A group's date range in words: "15 June, 14:02–17:41", or with the dates
+     * on both ends when it spans more than a day.
+     *
+     * Takes the zone explicitly so the wording can be tested without depending
+     * on where the machine running the tests happens to be.
+     */
+    fun timeRange(earliest: Long, latest: Long, zone: java.time.ZoneId): String {
+        val from = java.time.Instant.ofEpochMilli(earliest).atZone(zone)
+        val to = java.time.Instant.ofEpochMilli(latest).atZone(zone)
+        val day = java.time.format.DateTimeFormatter.ofPattern("d MMMM yyyy", java.util.Locale.UK)
+        val clock = java.time.format.DateTimeFormatter.ofPattern("HH:mm", java.util.Locale.UK)
+
+        return if (from.toLocalDate() == to.toLocalDate()) {
+            if (from.toLocalTime() == to.toLocalTime()) {
+                "${day.format(from)}, ${clock.format(from)}"
+            } else {
+                "${day.format(from)}, ${clock.format(from)}\u2013${clock.format(to)}"
+            }
+        } else {
+            "${day.format(from)} ${clock.format(from)} \u2013 ${day.format(to)} ${clock.format(to)}"
+        }
+    }
 }

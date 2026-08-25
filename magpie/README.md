@@ -199,6 +199,46 @@ out with `..`, or start with a dot, is refused outright, and illegal characters
 inside an otherwise sensible name are stripped. There is a cap of 300 folders
 and 10 levels, so a stray paste cannot run away.
 
+## Sorting the backlog by when things happened
+
+The problem this solves: deciding where each file goes **one file at a time**
+means deciding forty times about one event, and forty independent answers
+disagree with each other. Photos from one afternoon end up spread across three
+folders, each answer defensible on its own and the result a mess.
+
+**Sort the backlog** puts what is in your watched folders into runs by when
+things happened, so one event is one decision. Everything in a run shares a
+destination and a name, and a run therefore cannot scatter — not because the
+deciding got cleverer, but because there is only one decision left to make.
+
+**Nothing is sent anywhere and nothing is copied** until you file a run. The
+grouping is arithmetic on timestamps: free, instant, the same answer every
+time, and it works with the phone in aeroplane mode.
+
+**The times used.** A photo carries the moment it was taken in its EXIF, which
+is what you actually mean by "that afternoon" — the file's modified time might
+be when it was copied off a camera, which would scatter one shoot across
+several days. Everything else falls back to when the file landed, which for a
+run of downloads is exactly the right signal.
+
+**A new run starts after a quiet spell**, two hours by default, with 15 minutes,
+1 hour, 2 hours and 8 hours a tap away. Two hours holds an afternoon together
+and keeps yesterday separate from today.
+
+**Naming a run** numbers it in time order under one stem: type `ARRIVAL` and get
+`ARRIVAL_01.png` through `ARRIVAL_34.png`. The numbers are padded to the width
+of the run so they sort correctly in any file manager, and every file keeps its
+own extension — a run holding stills and video comes out right. The card shows
+the first and last name before you commit. A rule matching that name opens the
+picker at the right folder, exactly as it does for a single file.
+
+**When the grouping is wrong.** A gap threshold is a guess about intent, and a
+guess is sometimes wrong: one event either side of a lunch break comes back as
+two runs, and two different things on the same afternoon come back as one. So
+*Join next* merges a run with the one after it, *Split it* cuts a run before any
+file you choose, and *Skip* takes one off the list. That is the whole reason the
+review step exists, and it costs nothing to use.
+
 ## Safe to clear
 
 The fail-safe means Downloads never empties itself, and the only thing between
