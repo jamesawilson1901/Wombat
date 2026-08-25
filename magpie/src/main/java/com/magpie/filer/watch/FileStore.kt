@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
+import com.magpie.filer.move.Filed
 import java.io.File
 
 /** Something that went wrong, worded for the person holding the phone. */
@@ -50,6 +51,14 @@ class FileStore private constructor(private val prefs: SharedPreferences) {
         private const val KEY_WATCHING = "watching"
         private const val KEY_DESTINATION = "destination"
         private const val KEY_LAST_NOTIFICATION = "lastNotification"
+        private const val KEY_FILED = "filed"
+
+        /**
+         * Enough to clear up a real backlog, few enough that the list stays
+         * something a person reads rather than a database. The oldest go
+         * first, because the newest are the ones still fresh in mind.
+         */
+        private const val FILED_LIMIT = 300
         private const val KEY_API_KEY = "anthropicApiKey"
         private const val KEY_SUGGESTIONS = "suggestionsEnabled"
         private const val KEY_LIBRARY = "libraryTree"
@@ -318,6 +327,44 @@ class FileStore private constructor(private val prefs: SharedPreferences) {
     fun setLibrary(tree: Uri?) {
         prefs.edit().putString(KEY_LIBRARY, tree?.toString()).apply()
         _suggestions.value = _suggestions.value.copy(library = tree)
+    }
+
+    // ---- what is safe to clear up ------------------------------------------
+
+    private val _filed = MutableStateFlow(Filed.listFromJson(prefs.getString(KEY_FILED, null)))
+
+    /**
+     * Originals that have a verified copy somewhere else, so the user can clear
+     * them up. Magpie never removes them itself — this is only the knowledge of
+     * which ones are redundant, which it has and the user does not.
+     */
+    val filed: StateFlow<List<Filed>> = _filed.asStateFlow()
+
+    fun remember(entry: Filed) {
+        synchronized(lock) {
+            // One entry per original: filing the same file twice replaces the
+            // note rather than listing it twice.
+            val kept = _filed.value.filterNot { it.originalPath == entry.originalPath }
+            saveFiled(kept + entry)
+        }
+    }
+
+    /** Forget one, because the user has dealt with it or it is no longer true. */
+    fun forgetFiled(originalPath: String) {
+        synchronized(lock) {
+            saveFiled(_filed.value.filterNot { it.originalPath == originalPath })
+        }
+    }
+
+    /** Keep only the entries [stillTrue] vouches for. */
+    fun keepFiled(stillTrue: List<Filed>) {
+        synchronized(lock) { saveFiled(stillTrue) }
+    }
+
+    private fun saveFiled(entries: List<Filed>) {
+        val capped = entries.takeLast(FILED_LIMIT)
+        prefs.edit().putString(KEY_FILED, Filed.listToJson(capped)).apply()
+        _filed.value = capped
     }
 
     // ---- problems ----------------------------------------------------------

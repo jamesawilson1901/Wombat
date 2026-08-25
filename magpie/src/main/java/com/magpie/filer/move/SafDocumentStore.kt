@@ -153,6 +153,9 @@ class SafDocumentStore(
         context.contentResolver.openInputStream(uriFor(document))
             ?: throw IOException("the document would not open for reading")
 
+    override fun exists(document: String): Boolean =
+        column(document, DocumentsContract.Document.COLUMN_DOCUMENT_ID) != null
+
     override fun size(document: String): Long? =
         column(document, DocumentsContract.Document.COLUMN_SIZE)?.toLongOrNull()
 

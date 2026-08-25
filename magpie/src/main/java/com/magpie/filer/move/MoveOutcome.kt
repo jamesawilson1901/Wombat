@@ -20,6 +20,8 @@ sealed interface MoveOutcome {
         val destination: String,
         /** Where the original still is, because it was not touched. */
         val originalPath: String,
+        /** The copy's document id, so it can be found again to check on. */
+        val document: String,
         val notes: List<String> = emptyList(),
     ) : MoveOutcome
 
@@ -37,6 +39,8 @@ sealed interface MoveOutcome {
         /** What was already there under this name, when the name was the clash. */
         val existingSize: Long?,
         val incomingSize: Long,
+        /** The copy's document id, so it can be found again to check on. */
+        val document: String,
         /**
          * True when the contents were compared and match, false when they were
          * compared and differ, null when they could not be compared at all.

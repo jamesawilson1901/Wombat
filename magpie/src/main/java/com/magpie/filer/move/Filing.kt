@@ -202,6 +202,7 @@ object Filing {
                 savedAs = savedAs,
                 destination = destination,
                 originalPath = source.absolutePath,
+                document = created,
                 notes = notes,
             )
         } else {
@@ -213,6 +214,7 @@ object Filing {
                 originalPath = source.absolutePath,
                 existingSize = clash?.size,
                 incomingSize = expected,
+                document = created,
                 identical = identicalTo(source, expected, clash, twin, store),
                 sameContentAs = twin,
                 notes = notes,

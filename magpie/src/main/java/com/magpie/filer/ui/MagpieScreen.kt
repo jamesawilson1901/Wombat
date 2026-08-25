@@ -60,6 +60,7 @@ import com.magpie.filer.R
 import com.magpie.filer.core.Formatting
 import com.magpie.filer.core.Naming
 import com.magpie.filer.move.Destinations
+import com.magpie.filer.move.Filed
 import com.magpie.filer.move.MoveOutcome
 import com.magpie.filer.ui.theme.SectionLabel
 import com.magpie.filer.watch.SpottedFile
@@ -76,11 +77,13 @@ fun MagpieScreen(viewModel: MainViewModel) {
     val selecting by viewModel.selecting.collectAsState()
     val step by viewModel.step.collectAsState()
     val inFolders by viewModel.inFolders.collectAsState()
+    val filed by viewModel.filed.collectAsState()
     val suggestionSettings by viewModel.suggestionSettings.collectAsState()
 
     val context = LocalContext.current
     var showIgnored by rememberSaveable { mutableStateOf(false) }
     var showInFolders by rememberSaveable { mutableStateOf(false) }
+    var showFiled by rememberSaveable { mutableStateOf(false) }
 
     val folderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -224,6 +227,45 @@ fun MagpieScreen(viewModel: MainViewModel) {
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                }
+            }
+
+            item {
+                SectionHeading(
+                    title = if (filed.isEmpty()) "SAFE TO CLEAR" else "SAFE TO CLEAR · ${filed.size}",
+                    action = if (showFiled) "Hide" else "Show",
+                    onAction = {
+                        showFiled = !showFiled
+                        if (showFiled) viewModel.refreshFiled()
+                    },
+                )
+            }
+            if (showFiled) {
+                if (filed.isEmpty()) {
+                    item {
+                        Text(
+                            text = "Nothing here yet. Once you file something, the original " +
+                                "it was copied from is listed here so you know it is safe to " +
+                                "remove.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else {
+                    item {
+                        Text(
+                            text = "Each of these has a copy that Magpie checked byte for " +
+                                "byte, so the original is redundant. Magpie will not remove " +
+                                "them — that is the fail-safe — but you can, in your file " +
+                                "manager. Anything whose copy has since gone is dropped from " +
+                                "this list rather than left saying something untrue.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    items(filed, key = { "filed:" + it.originalPath }) { entry ->
+                        FiledRow(entry) { viewModel.forgetFiled(entry.originalPath) }
                     }
                 }
             }
@@ -629,6 +671,50 @@ private fun SuggestionsCard(
                         TextButton(onClick = onClearLibrary) { Text("Clear") }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FiledRow(entry: Filed, onDismiss: () -> Unit) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                text = entry.originalName,
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "Copied to ${entry.destination}" +
+                    if (entry.savedAs != entry.originalName) " as \"${entry.savedAs}\"" else "",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            SelectionContainer {
+                Text(
+                    text = entry.originalPath,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = Formatting.fileSize(entry.size),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextButton(onClick = onDismiss) { Text("Done with it") }
             }
         }
     }

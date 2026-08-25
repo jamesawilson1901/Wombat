@@ -56,6 +56,13 @@ interface DocumentStore {
      */
     fun open(document: String): java.io.InputStream
 
+    /**
+     * Whether the document is still there. Used to check that a copy Magpie
+     * made has not since been moved or removed by someone else, before telling
+     * the user an original is safe to clear up.
+     */
+    fun exists(document: String): Boolean
+
     /** The size the folder reports back. Null when it will not say. */
     fun size(document: String): Long?
 

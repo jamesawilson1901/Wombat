@@ -96,6 +96,8 @@ class FakeDocumentStore(
         return resolve(document).inputStream()
     }
 
+    override fun exists(document: String): Boolean = resolve(document).exists()
+
     override fun size(document: String): Long? {
         sizeFails?.let { throw IOException(it) }
         if (hidesSize) return null

@@ -16,6 +16,8 @@ import com.magpie.filer.ai.Suggester
 import com.magpie.filer.core.Naming
 import com.magpie.filer.core.Safety
 import com.magpie.filer.move.Destinations
+import com.magpie.filer.move.Filed
+import com.magpie.filer.move.SafDocumentStore
 import com.magpie.filer.move.MoveOutcome
 import com.magpie.filer.move.Mover
 import com.magpie.filer.watch.FileStore
@@ -109,6 +111,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val problems = store.problems
     val watching: StateFlow<Boolean> = store.watching
     val suggestionSettings = store.suggestions
+    val filed = store.filed
 
     /** When a service start was last asked for. Read by readReadiness below. */
     private var startRequestedAt = 0L
@@ -529,6 +532,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 if (landed != null) store.markOffered(landed.absolutePath)
 
+                // Remember which original is now redundant, so the user can be
+                // told what is safe to clear up. Magpie still never removes it.
+                rememberFiled(file, outcome, tree)
+
                 // A verified copy takes the file off the waiting list: the user
                 // has dealt with it. The original is still on the phone — Magpie
                 // never deletes — and the report says so in as many words, but
@@ -546,6 +553,85 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _step.value = FilingStep.Report(outcomes)
         }
     }
+
+    private fun rememberFiled(file: SpottedFile, outcome: MoveOutcome, tree: Uri) {
+        val entry = when (outcome) {
+            is MoveOutcome.Copied -> Filed(
+                originalPath = file.path,
+                originalName = file.name,
+                size = file.size,
+                destination = outcome.destination,
+                savedAs = outcome.savedAs,
+                tree = tree.toString(),
+                document = outcome.document,
+            )
+
+            is MoveOutcome.Duplicated -> Filed(
+                originalPath = file.path,
+                originalName = file.name,
+                size = file.size,
+                destination = outcome.duplicatesFolder,
+                savedAs = outcome.savedAs,
+                tree = tree.toString(),
+                document = outcome.document,
+            )
+
+            else -> null
+        }
+        if (entry != null) store.remember(entry)
+    }
+
+    /**
+     * Check every clear-up note is still true, and drop the ones that are not.
+     *
+     * An original the user has already removed, or a copy that has since been
+     * moved or deleted by something else, means the note is stale — and a list
+     * that says "safe to clear" has to be right or it is worse than useless.
+     */
+    fun refreshFiled() {
+        scope.launch {
+            val checked = withContext(Dispatchers.IO) { verifyFiled(store.filed.value) }
+            store.keepFiled(checked)
+        }
+    }
+
+    private fun verifyFiled(entries: List<Filed>): List<Filed> {
+        // One store per destination tree, not one per entry: building it is
+        // cheap but the permission check behind it is not.
+        val stores = HashMap<String, SafDocumentStore?>()
+        return entries.filter { entry ->
+            val original = File(entry.originalPath)
+            val parent = original.parentFile
+            // A folder Magpie cannot read is a card that is out, not proof the
+            // original has gone — the entry is kept rather than guessed away.
+            if (parent == null || !parent.canRead()) return@filter true
+            if (!original.isFile) return@filter false
+
+            val store = stores.getOrPut(entry.tree) {
+                try {
+                    val tree = Uri.parse(entry.tree)
+                    SafDocumentStore(app, tree, Destinations.label(app, tree))
+                } catch (e: IllegalArgumentException) {
+                    null
+                }
+            } ?: return@filter false
+
+            try {
+                store.exists(entry.document)
+            } catch (e: SecurityException) {
+                // Permission to that folder is gone, so the copy cannot be
+                // vouched for any more.
+                false
+            } catch (e: IllegalArgumentException) {
+                false
+            } catch (e: java.io.IOException) {
+                false
+            }
+        }
+    }
+
+    /** The user has dealt with this one; stop offering it. */
+    fun forgetFiled(originalPath: String) = store.forgetFiled(originalPath)
 
     // ---- opened from a notification ----------------------------------------
 
