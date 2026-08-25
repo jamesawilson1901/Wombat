@@ -210,10 +210,11 @@ first install:
   produces the APK and `gradle :magpie:testDebugUnitTest` runs green. The unit
   tests cover filename tidying and suggestions, size and file-type wording, and
   the finished-arriving rule.
-- **Never run on a device or an emulator.** Nothing in this app has been
-  executed on Android. Everything below the pure-Kotlin layer — the watcher, the
-  foreground service, the notifications, every copy, and the whole UI — is
-  reviewed and reasoned about, not observed working.
+- **Never run on a device or an emulator.** The filing engine and the SAF glue
+  now run under Robolectric on every CI push, so they are executed rather than
+  merely reasoned about — but on a JVM, not a phone. The watcher, the foreground
+  service, the notifications and the whole UI are still reviewed and reasoned
+  about, not observed working.
 
 What that means in practice: the first thing to try is one small file, into a
 folder on internal storage, and check the copy arrived before trusting it with
@@ -233,16 +234,30 @@ anything that matters. Then try one onto the SD card.
   call. `grep -rn "\.delete()\|deleteDocument" magpie/src/main` returns
   nothing. A test reflects over the interface and fails if anyone ever adds
   one.
-- **What is still untested is the SAF glue itself** — `SafDocumentStore.kt`,
-  about a hundred lines where each method is one `DocumentsContract` call and
-  no decisions. It is deliberately thin so that the part that cannot be tested
-  is also not the part that thinks. A provider that behaves unlike the fake is
-  the remaining risk, which is why the fake can be told to misbehave in the
-  four ways real ones do.
-- **No request has ever been made to Anthropic from this code.** The suggestion
-  path compiles, and the SDK call is built against the published API, but it has
-  not been run once — not on a device, not on a desktop, not with a real key.
-  The first suggestion you ask for is the first time that code executes.
+- **The SAF glue is tested against a real `DocumentsProvider`**, run under
+  Robolectric with the provider backed by a temporary directory
+  (`SafDocumentStoreTest.kt`, 18 cases). Tree URIs, document ids, cursors and
+  file descriptors all take their real code paths, so `SafDocumentStore.kt` is
+  exercised as written rather than described. It covers a 700 KB write across
+  buffer boundaries, an empty file, a provider that renames what it is given,
+  one that hides sizes, one that refuses to create, and one that answers
+  nothing — which must throw rather than look like an empty folder, because an
+  empty folder means "no name is taken", which is the wrong thing to believe
+  right before writing.
+- **The Anthropic call is tested end to end against a local HTTP server**
+  (`SuggesterTest.kt`, 21 cases), with the SDK pointed at it by a `baseUrl`
+  argument the app itself never passes. Everything but Anthropic's own machines
+  is covered: the request the SDK actually puts on the wire against the
+  documented shape, a good reply, a reply that tries to escape the folder or
+  become a dotfile or change the extension, a refusal, 401, 429, 400, 500, an
+  unreachable server, a reply that is not JSON, an empty reply, and a blank key
+  making no request at all. One test reads the request body and asserts the
+  file's contents — and even its path on disk — are not in it.
+- **No request has ever been made to Anthropic's actual servers from this
+  code.** The call is exercised in full against a local server, so the request
+  shape, the parsing and every failure path are known good — but no real key has
+  ever been used and no reply has ever come back from Anthropic. What that
+  leaves unproven is whether the live API answers exactly as the tests assume.
 
 The specific things worth watching for, because they are the least certain:
 
@@ -309,6 +324,23 @@ against a `DocumentStore` backed by a temporary directory (duplicates,
 verification, and the no-delete guarantee), the path safety rules, filename
 tidying and suggestion building, size and file-type wording, and the
 finished-arriving rule.
+
+### Testing
+
+```
+gradle :magpie:testDebugUnitTest
+```
+
+Seventy-four tests, all on the JVM, no device needed. The two that need
+explaining:
+
+- **`SafDocumentStoreTest`** runs under Robolectric against
+  `TestDocumentsProvider`, a genuine `DocumentsProvider` backed by a temporary
+  directory. That is what makes the Storage Access Framework testable at all.
+- **`SuggesterTest`** stands up a local `HttpServer` and points the Anthropic
+  SDK at it with the `baseUrl` argument on `Suggester.suggest`. Production never
+  passes it, so the app always talks to Anthropic; the tests get to read what
+  went on the wire.
 
 ### Checking the Anthropic call without a full build
 
