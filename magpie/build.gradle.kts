@@ -41,6 +41,21 @@ android {
     testOptions {
         unitTests {
             isIncludeAndroidResources = true
+
+            // CI is the only place these run, so a failure has to be legible
+            // from the log alone. Without this Gradle prints the exception
+            // class and a line number and nothing else — not the message,
+            // which is usually the whole answer.
+            all {
+                it.testLogging {
+                    events("failed")
+                    exceptionFormat =
+                        org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+                    showStackTraces = true
+                    showCauses = true
+                    showExceptions = true
+                }
+            }
         }
     }
 
