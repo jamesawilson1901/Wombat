@@ -85,6 +85,12 @@ sealed interface FilingStep {
     ) : FilingStep
 
     /**
+     * A ticked batch being named: one stem, numbered across the lot, or kept
+     * as they are.
+     */
+    data class NameBatch(val files: List<SpottedFile>) : FilingStep
+
+    /**
      * Naming comes before choosing a folder, because the name is what decides
      * the folder. You call it what it is; the rule that matches that name then
      * puts the picker where that kind of thing goes.
@@ -523,8 +529,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _step.value = if (files.size == 1) {
             askName(files.first(), prefill = null)
         } else {
-            // A batch shares one name at best, so there is nothing to type.
-            FilingStep.ChooseFolder(nextToken++, files, lastDestination)
+            // A batch gets one stem numbered across the lot — or keeps its
+            // names, which is one tap. Time order, so the numbers mean
+            // something.
+            FilingStep.NameBatch(files.sortedBy { it.spottedAt })
         }
         return true
     }
@@ -536,6 +544,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             initial = prefill ?: file.name,
             suggestions = (listOfNotNull(prefill) + Naming.suggestions(file.name)).distinct(),
         )
+
+    /**
+     * The batch has been named — or waved through. [stem] null means keep
+     * every file's own name; otherwise the whole batch is numbered under it
+     * in time order, exactly as a run from the backlog is.
+     */
+    fun confirmBatchName(stem: String?) {
+        val batch = _step.value as? FilingStep.NameBatch ?: return
+        if (stem == null) {
+            _step.value = FilingStep.ChooseFolder(nextToken++, batch.files, lastDestination)
+            return
+        }
+        val names = Grouping.numbered(stem, batch.files)
+        if (names.isEmpty()) {
+            store.report(
+                "\"$stem\" leaves nothing to name these with. Try another name, or keep " +
+                    "their own names."
+            )
+            return
+        }
+        pendingGroupNames = names
+        // The name decides the folder here too: a rule matching it opens the
+        // picker at the right place.
+        val rule = Rules.match(names.values.first(), store.rules.value)
+        scope.launch {
+            val at = rule?.let { folderUriFor(it.folder) }
+            _step.value = FilingStep.ChooseFolder(
+                token = nextToken++,
+                files = batch.files,
+                openAt = at ?: lastDestination,
+            )
+        }
+    }
 
     fun onFolderChosen(uri: Uri?) {
         val pending = _step.value as? FilingStep.ChooseFolder

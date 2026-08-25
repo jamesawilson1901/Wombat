@@ -549,6 +549,14 @@ fun MagpieScreen(viewModel: MainViewModel) {
             onDecline = viewModel::declineSuggestion,
         )
 
+        is FilingStep.NameBatch -> BatchNameDialog(
+            step = current,
+            rules = rules,
+            onUse = { stem -> viewModel.confirmBatchName(stem) },
+            onKeep = { viewModel.confirmBatchName(null) },
+            onCancel = viewModel::cancelFiling,
+        )
+
         is FilingStep.Rename -> RenameDialog(
             step = current,
             rules = rules,
@@ -1400,6 +1408,76 @@ private fun ReportDialog(
             {
                 TextButton(onClick = { onRemember(offer); onDismiss() }) { Text("Remember this") }
             }
+        },
+    )
+}
+
+@Composable
+private fun BatchNameDialog(
+    step: FilingStep.NameBatch,
+    rules: List<Rule>,
+    onUse: (String) -> Unit,
+    onKeep: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    var stem by rememberSaveable(step.files.first().path) { mutableStateOf("") }
+    val preview = if (stem.isBlank()) emptyMap() else Grouping.numbered(stem, step.files)
+    val willMatch = preview.values.firstOrNull()?.let { Rules.match(it, rules) }
+
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("Name these ${step.files.size}?") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = "One name, numbered across the lot in the order they arrived — " +
+                        "or keep the names they came with.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = stem,
+                    onValueChange = { stem = it },
+                    singleLine = true,
+                    label = { Text("Call them") },
+                    placeholder = { Text("ANNA_REF") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (stem.isNotBlank()) {
+                    Text(
+                        text = if (preview.isEmpty()) {
+                            "That name leaves nothing to call them."
+                        } else {
+                            "Saved as ${preview.values.first()} … ${preview.values.last()}"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (preview.isEmpty()) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+                if (willMatch != null) {
+                    Text(
+                        text = "That name matches a rule: the picker will open at " +
+                            "\"${willMatch.folder}\".",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onUse(stem) }, enabled = preview.isNotEmpty()) {
+                Text("Use this name")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onKeep) { Text("Keep their names") }
         },
     )
 }
