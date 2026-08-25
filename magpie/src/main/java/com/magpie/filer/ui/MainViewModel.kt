@@ -13,6 +13,7 @@ import com.magpie.filer.ai.LibraryFolders
 import com.magpie.filer.ai.LibraryListing
 import com.magpie.filer.ai.Rule
 import com.magpie.filer.ai.Rules
+import com.magpie.filer.ai.FilingSuggestion as Suggestion
 import com.magpie.filer.ai.SuggestionResult
 import com.magpie.filer.ai.Suggester
 import com.magpie.filer.core.Naming
@@ -115,6 +116,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val suggestionSettings = store.suggestions
     val filed = store.filed
     val rules = store.rules
+    val extraRoots = store.extraRoots
 
     /** When a service start was last asked for. Read by readReadiness below. */
     private var startRequestedAt = 0L
@@ -340,6 +342,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        // An answer already in hand from a batch is used rather than asked for
+        // again — that is the whole point of having asked in bulk.
+        val held = takeBatchAnswer(file)
+        if (held != null) {
+            scope.launch { offerSuggestion(file, held, settings.library) }
+            return
+        }
+
         if (!settings.usable) {
             startFiling(listOf(file))
             return
@@ -378,6 +388,66 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             files = listOf(file),
             openAt = at ?: lastDestination,
         )
+    }
+
+    /**
+     * Ask about everything on the waiting list in one request.
+     *
+     * Switching suggestions on with a backlog means a request per file
+     * otherwise. Answers are held and used as each file is filed, so the
+     * waiting is done once rather than every time you tap something.
+     */
+    fun suggestForWaiting() {
+        val settings = store.suggestions.value
+        if (!settings.usable) {
+            store.report("Turn on Ask Claude for a name and save an API key first.")
+            return
+        }
+        val files = waiting.value.take(Suggester.BATCH_LIMIT)
+        if (files.isEmpty()) {
+            store.report("Nothing is waiting, so there is nothing to ask about.")
+            return
+        }
+        if (_step.value !is FilingStep.Idle) {
+            store.report("Magpie is busy filing. Finish that first.")
+            return
+        }
+
+        _step.value = FilingStep.Working("Asking Claude about ${files.size} files…")
+        scope.launch {
+            val folders = settings.library?.let { lib ->
+                when (val listing = withContext(Dispatchers.IO) { LibraryFolders.list(app, lib) }) {
+                    is LibraryListing.Folders -> listing.folders
+                    is LibraryListing.Failed -> {
+                        store.report(listing.reason)
+                        emptyList()
+                    }
+                }
+            }.orEmpty()
+
+            val answers = Suggester.suggestMany(files, folders.map { it.name }, settings.apiKey)
+            _batchSuggestions.value = answers
+            _step.value = FilingStep.Idle
+            store.report(
+                if (answers.isEmpty()) {
+                    "Claude had nothing to suggest for those, or the request did not get " +
+                        "through. Filing works as usual."
+                } else {
+                    "Suggestions ready for ${answers.size} of ${files.size}. Tap a file to " +
+                        "file it and its suggestion is already there — no more waiting."
+                }
+            )
+        }
+    }
+
+    /** Answers from the last batch, used up as each file is filed. */
+    private val _batchSuggestions = MutableStateFlow<Map<String, Suggestion>>(emptyMap())
+    val batchSuggestions: StateFlow<Map<String, Suggestion>> = _batchSuggestions.asStateFlow()
+
+    private fun takeBatchAnswer(file: SpottedFile): Suggestion? {
+        val answer = _batchSuggestions.value[file.path] ?: return null
+        _batchSuggestions.value = _batchSuggestions.value - file.path
+        return answer
     }
 
     fun addRule(rule: Rule) = store.addRule(rule)
@@ -423,19 +493,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             is SuggestionResult.Ready -> {
-                // Only a folder Magpie actually offered is accepted, so a
-                // hallucinated name cannot send the picker somewhere odd.
-                val match = offered.firstOrNull { it.name == result.suggestion.folder }
                 if (_step.value is FilingStep.Consulting) {
-                    _step.value = FilingStep.Suggested(
-                        file = file,
-                        suggestion = result.suggestion,
-                        folderUri = match?.let { library?.let { lib -> LibraryFolders.uriFor(lib, match.documentId) } },
-                        folderName = match?.name,
-                    )
+                    show(file, result.suggestion, offered, library)
                 }
             }
         }
+    }
+
+    /**
+     * Put a suggestion in front of the user. Only a folder Magpie actually
+     * offered is accepted, so an invented folder name cannot send the picker
+     * somewhere odd — it simply becomes a name suggestion with no folder.
+     */
+    private fun show(
+        file: SpottedFile,
+        suggestion: Suggestion,
+        offered: List<LibraryFolder>,
+        library: Uri?,
+    ) {
+        val match = offered.firstOrNull { it.name == suggestion.folder }
+        _step.value = FilingStep.Suggested(
+            file = file,
+            suggestion = suggestion,
+            folderUri = match?.let { m -> library?.let { LibraryFolders.uriFor(it, m.documentId) } },
+            folderName = match?.name,
+        )
+    }
+
+    /** Show a suggestion that came from a batch, looking the folder up now. */
+    private suspend fun offerSuggestion(file: SpottedFile, suggestion: Suggestion, library: Uri?) {
+        val offered = library?.let { lib ->
+            when (val listing = withContext(Dispatchers.IO) { LibraryFolders.list(app, lib) }) {
+                is LibraryListing.Folders -> listing.folders
+                is LibraryListing.Failed -> emptyList()
+            }
+        }.orEmpty()
+        show(file, suggestion, offered, library)
     }
 
     fun acceptSuggestion() {
@@ -680,6 +773,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** The user has dealt with this one; stop offering it. */
     fun forgetFiled(originalPath: String) = store.forgetFiled(originalPath)
+
+    /**
+     * Watch a folder the user picked. The picker hands back a tree URI, but a
+     * FileObserver needs a real path, so this only works for folders on your own
+     * storage — which is also the only place Magpie is allowed to look.
+     */
+    fun addWatchedFolder(tree: Uri?) {
+        if (tree == null) return
+        val folder = Destinations.folderPath(tree)
+        if (folder == null) {
+            store.report(
+                "Magpie can only watch folders on your phone's own storage or a memory " +
+                    "card, and that one is somewhere it cannot follow — a cloud folder, or " +
+                    "another app's. Nothing was changed."
+            )
+            return
+        }
+        Safety.refuse(folder.absolutePath, WatchRoots.volumePaths(app))?.let {
+            store.report("Magpie will not watch there — $it.")
+            return
+        }
+        if (!folder.isDirectory) {
+            store.report("${folder.absolutePath} is not a folder Magpie can read. Nothing was changed.")
+            return
+        }
+        store.addRoot(folder.absolutePath)
+        // Watching starts from now for a folder just added, so switching it on
+        // does not offer everything already in it.
+        store.baselineFor(folder.absolutePath, System.currentTimeMillis())
+        store.report(
+            "Now watching ${folder.absolutePath}. What is already in it is treated as old, " +
+                "and is reachable from Already in your folders."
+        )
+    }
+
+    fun removeWatchedFolder(path: String) = store.removeRoot(path)
 
     // ---- opened from a notification ----------------------------------------
 

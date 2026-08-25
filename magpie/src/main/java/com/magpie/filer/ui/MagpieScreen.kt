@@ -81,6 +81,7 @@ fun MagpieScreen(viewModel: MainViewModel) {
     val inFolders by viewModel.inFolders.collectAsState()
     val filed by viewModel.filed.collectAsState()
     val rules by viewModel.rules.collectAsState()
+    val extraRoots by viewModel.extraRoots.collectAsState()
     val suggestionSettings by viewModel.suggestionSettings.collectAsState()
 
     val context = LocalContext.current
@@ -88,6 +89,7 @@ fun MagpieScreen(viewModel: MainViewModel) {
     var showInFolders by rememberSaveable { mutableStateOf(false) }
     var showFiled by rememberSaveable { mutableStateOf(false) }
     var showRules by rememberSaveable { mutableStateOf(false) }
+    var showFolders by rememberSaveable { mutableStateOf(false) }
 
     val folderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -96,6 +98,10 @@ fun MagpieScreen(viewModel: MainViewModel) {
     val libraryPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { chosen -> if (chosen != null) viewModel.setLibrary(chosen) }
+
+    val watchFolderPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { chosen -> viewModel.addWatchedFolder(chosen) }
 
     val askForNotifications = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -177,6 +183,16 @@ fun MagpieScreen(viewModel: MainViewModel) {
                 )
             }
 
+            // Asking about a backlog one file at a time is a request each and a
+            // wait each. One request covers the lot.
+            if (waiting.size > 1 && suggestionSettings.usable && !selecting) {
+                item {
+                    TextButton(onClick = viewModel::suggestForWaiting) {
+                        Text("Ask Claude about all ${waiting.size} at once")
+                    }
+                }
+            }
+
             if (waiting.isEmpty()) {
                 item { EmptyWaiting(watching) }
             } else {
@@ -231,6 +247,56 @@ fun MagpieScreen(viewModel: MainViewModel) {
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                }
+            }
+
+            item {
+                SectionHeading(
+                    title = "FOLDERS WATCHED",
+                    action = if (showFolders) "Hide" else "Show",
+                    onAction = { showFolders = !showFolders },
+                )
+            }
+            if (showFolders) {
+                item {
+                    Text(
+                        text = "Downloads, both Screenshots folders and a memory card's " +
+                            "Download folder are watched already. You can add others — a " +
+                            "messaging app's folder, or where a scanner app saves. Each one " +
+                            "means a notification when something lands in it, so add the " +
+                            "ones you actually file from.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                items(extraRoots, key = { "root:$it" }) { path ->
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(
+                                start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp
+                            ),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = path,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = { viewModel.removeWatchedFolder(path) }) {
+                                Text("Stop")
+                            }
+                        }
+                    }
+                }
+                item {
+                    Button(onClick = { watchFolderPicker.launch(null) }) {
+                        Text("Watch another folder")
                     }
                 }
             }

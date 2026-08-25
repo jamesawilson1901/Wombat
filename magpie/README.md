@@ -135,20 +135,103 @@ Any check failing is reported with the reason, and nothing anywhere is removed.
 
 ## Duplicates
 
-If the folder you pick already has a file with the name you are filing under,
-Magpie does not write over it and does not let the storage provider quietly
-rename yours to `thing (1).pdf`. It finds or creates a **`Duplicates` folder
-inside the destination** and puts the copy there.
+A duplicate goes into a **`Duplicates` folder inside the destination**, never
+over the top of what is there and never left to the storage provider to rename
+to `thing (1).pdf`.
 
-The report then tells you which it was:
+Two things count as a duplicate:
 
-- **Same size as the one already there** — very likely the same file twice.
-- **Different size** — both sizes are given, so you can see they are not the
-  same file and decide which you want.
+- **The name is already taken.**
+- **The same file is already there under a different name.** Contents are
+  compared with a SHA-256 fingerprint, so this is a fact rather than a guess —
+  and it is the case a name check would never have caught.
 
-An existing `Duplicates` folder is reused, never duplicated itself. If a name
-is taken inside `Duplicates` too, the provider disambiguates and the report
-names the file it actually created — still without anything being overwritten.
+The report says which, and whether the contents actually match: the same file,
+a different file with both sizes given, or that the contents could not be
+compared. Three answers rather than a hedge.
+
+This costs almost nothing. Two files can only match if they are the same size,
+so the sizes already in the folder listing narrow the candidates before
+anything is opened — usually to none, in which case nothing is read at all. A
+folder that will not report sizes yields no candidates, which is the safe way
+round: a duplicate goes unnoticed rather than a different file being called
+one. A candidate that cannot be read is said so, not assumed either way.
+
+An existing `Duplicates` folder is reused, never duplicated itself.
+
+## Safe to clear
+
+The fail-safe means Downloads never empties itself, and the only thing between
+you and clearing it is knowing which files are redundant. Magpie knows.
+
+**Safe to clear** lists every original that has a copy Magpie checked byte for
+byte, with where the copy went and the original's full path. Magpie still never
+removes anything — you do, in your file manager — but it stops being the only
+one who knows which files are safe to go.
+
+Opening the list re-checks every entry, because a list that says "safe to
+clear" has to be right or it is worse than useless. An original you have
+already removed drops off; so does one whose copy has since been moved or
+deleted by something else. A folder that cannot be read — a card that is out —
+keeps its entries rather than guessing them away. *Done with it* drops one by
+hand.
+
+This is deliberately **not a history and not an undo log**. It records nothing
+about what Magpie did, only where a redundant file is sitting right now, and
+entries exist to be checked and then to go away. "No history, no undo" still
+holds.
+
+## Rules
+
+Filing is repetitive — bank statements go to the same folder every month — so
+after you file something Magpie offers to remember where that kind of file
+goes.
+
+A rule matches on the two things actually in a filename: its **extension** and
+a **word** in it. Both are things you can look at and predict, and the rule
+says in words exactly what it will do. A matching rule opens the folder picker
+already at the right folder; it never files anything without you confirming.
+
+What it saves is the choosing, the waiting and the cost. A rule answers
+instantly, works offline and spends nothing, so the API is left for files that
+are genuinely new.
+
+Nothing is learned quietly in the background: a rule exists because you agreed
+to one, it is listed under **Rules** with what it does, and *Forget* removes
+it. Rules are tried in order, top first, and the offer is only made for a file
+no rule already covers.
+
+Two things the tests exist to prevent. A rule with neither an extension nor a
+word would match everything and file the whole world into one folder — it
+cannot be created, and one is dropped even if it somehow turns up in storage.
+And the word comes from the filename alone, never a date or a number, so
+`20240317_142233.jpg` yields an extension-only rule rather than one keyed on a
+timestamp that will never recur.
+
+## Folders you choose to watch
+
+Downloads, both `Screenshots` folders and a card's `Download` folder are
+watched already. Under **Folders watched** you can add others — a messaging
+app's folder, or wherever a scanner app saves.
+
+Each watched folder means a notification every time something lands in it, so
+add the ones you actually file from. A folder added this way starts from the
+moment you add it, so what is already in it is treated as old and is reachable
+from *Already in your folders* rather than arriving as a hundred
+notifications. Only folders on your own storage can be added: the watcher needs
+a real path, and the safety check applies exactly as it does everywhere else.
+
+## Asking about a backlog
+
+Switching suggestions on with a full Downloads folder would otherwise mean a
+request per file, each with its own wait. **Ask Claude about all N at once**
+sends one request covering up to 25 waiting files, and the answers are held and
+used as you file each one, so the waiting happens once.
+
+Nothing extra is sent — the same metadata per file as a single ask. Answers are
+matched back by the file's own name rather than by position, so a short or
+reordered reply means a file has *no* suggestion rather than the *wrong* one.
+If the batch fails, filing carries on exactly as before.
 
 ## What Magpie will not touch
 

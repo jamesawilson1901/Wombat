@@ -31,7 +31,15 @@ object WatchRoots {
         "Documents", "Books", "Podcasts", "Recordings", "Bluetooth",
     )
 
-    fun discover(context: Context): List<WatchRoot> {
+    fun discover(context: Context): List<WatchRoot> =
+        discover(context, FileStore.get(context).extraRoots.value)
+
+    /**
+     * [extra] are folders the user added themselves. They are put through the
+     * same safety check as everything else, so adding one is not a way round
+     * it, and a folder that has gone simply stops appearing.
+     */
+    fun discover(context: Context, extra: List<String>): List<WatchRoot> {
         val found = LinkedHashMap<String, WatchRoot>()
 
         fun offer(directory: File?, label: String, removable: Boolean) {
@@ -54,6 +62,11 @@ object WatchRoots {
         for (card in removableRoots(context)) {
             offer(File(card, "Download"), "SD card", removable = true)
             offer(File(card, "Downloads"), "SD card", removable = true)
+        }
+
+        for (path in extra) {
+            val directory = File(path)
+            offer(directory, directory.name.ifBlank { "Added folder" }, removable = false)
         }
 
         // Worked out once, not once per folder: it asks Android about storage.

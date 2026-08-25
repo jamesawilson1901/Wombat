@@ -218,6 +218,148 @@ object Suggester {
         }
     }
 
+    /**
+     * The most files worth putting in one request. Past this the reply gets
+     * long enough that the wait stops feeling like a shortcut.
+     */
+    const val BATCH_LIMIT = 25
+
+    private val BATCH_SCHEMA: JsonOutputFormat.Schema = JsonOutputFormat.Schema.builder()
+        .putAdditionalProperty("type", JsonValue.from("object"))
+        .putAdditionalProperty("additionalProperties", JsonValue.from(false))
+        .putAdditionalProperty("required", JsonValue.from(listOf("files")))
+        .putAdditionalProperty(
+            "properties",
+            JsonValue.from(
+                mapOf(
+                    "files" to mapOf(
+                        "type" to "array",
+                        "description" to "One entry per file, in the order given.",
+                        "items" to mapOf(
+                            "type" to "object",
+                            "additionalProperties" to false,
+                            "required" to listOf("given", "name", "folder", "reason"),
+                            "properties" to mapOf(
+                                "given" to mapOf(
+                                    "type" to "string",
+                                    "description" to "The file's original name, copied back exactly.",
+                                ),
+                                "name" to mapOf("type" to "string"),
+                                "folder" to mapOf("type" to "string"),
+                                "reason" to mapOf("type" to "string"),
+                            ),
+                        ),
+                    )
+                )
+            ),
+        )
+        .build()
+
+    /**
+     * Ask about several files at once.
+     *
+     * Switching suggestions on with a backlog waiting means asking about each
+     * one in turn, which is slow and costs a request every time. One request
+     * covering a batch is dramatically cheaper per file and answers in a single
+     * wait. Nothing extra is sent: it is the same metadata per file as [suggest].
+     *
+     * The reply is matched back by the original name, so a missing or invented
+     * entry simply means that file has no suggestion rather than the wrong one.
+     */
+    suspend fun suggestMany(
+        files: List<SpottedFile>,
+        folders: List<String>,
+        apiKey: String,
+        baseUrl: String? = null,
+    ): Map<String, FilingSuggestion> = withContext(Dispatchers.IO) {
+        askMany(files.take(BATCH_LIMIT), folders, apiKey, baseUrl)
+    }
+
+    private fun askMany(
+        files: List<SpottedFile>,
+        folders: List<String>,
+        apiKey: String,
+        baseUrl: String?,
+    ): Map<String, FilingSuggestion> {
+        if (apiKey.isBlank() || files.isEmpty()) return emptyMap()
+
+        val question = buildString {
+            append("Here are ").append(files.size).append(" files to file.\n\n")
+            for (file in files) {
+                append("- name: ").append(file.name)
+                append(" | size: ").append(Formatting.fileSize(file.size))
+                append(" | type: ").append(Formatting.typeLabel(file.name))
+                append(" | landed in: ").append(file.source).append('\n')
+            }
+            append("\nFolders to choose from: ")
+            append(if (folders.isEmpty()) "(none — suggest names only)" else folders.joinToString(", "))
+            append("\n\nAnswer for every file, in the order given, copying each file's ")
+            append("original name into \"given\" exactly as it appears above.")
+        }
+
+        val params = MessageCreateParams.builder()
+            .model(MODEL)
+            .maxTokens(MAX_TOKENS * 4)
+            .system(SYSTEM_PROMPT)
+            .outputConfig(
+                OutputConfig.builder()
+                    .effort(OutputConfig.Effort.LOW)
+                    .format(JsonOutputFormat.builder().schema(BATCH_SCHEMA).build())
+                    .build()
+            )
+            .addUserMessage(question)
+            .build()
+
+        return try {
+            readMany(clientFor(apiKey, baseUrl).messages().create(params), files)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            // A batch is a convenience on top of a convenience. If it fails the
+            // caller falls back to asking one at a time, so there is nothing
+            // here worth interrupting the user for.
+            emptyMap()
+        }
+    }
+
+    private fun readMany(
+        message: com.anthropic.models.messages.Message,
+        files: List<SpottedFile>,
+    ): Map<String, FilingSuggestion> {
+        if (message.stopDetails().orElse(null) != null) return emptyMap()
+
+        val text = message.content()
+            .mapNotNull { it.text().orElse(null) }
+            .joinToString(separator = "") { it.text() }
+            .trim()
+        if (text.isEmpty()) return emptyMap()
+
+        val array = try {
+            JSONObject(text).optJSONArray("files")
+        } catch (e: JSONException) {
+            null
+        } ?: return emptyMap()
+
+        val byName = files.associateBy { it.name }
+        val found = HashMap<String, FilingSuggestion>()
+        for (i in 0 until array.length()) {
+            val item = array.optJSONObject(i) ?: continue
+            // Matched back by the name that was sent, never by position, so a
+            // short or reordered reply cannot put a suggestion on the wrong file.
+            val file = byName[item.optString("given")] ?: continue
+            val proposed = Naming.withExtensionOf(
+                Naming.sanitise(item.optString("name")),
+                file.name,
+            )
+            found[file.path] = FilingSuggestion(
+                name = if (Naming.isUsable(proposed)) proposed else file.name,
+                folder = item.optString("folder").trim(),
+                reason = item.optString("reason").trim(),
+            )
+        }
+        return found
+    }
+
     private fun read(
         message: com.anthropic.models.messages.Message,
         file: SpottedFile,

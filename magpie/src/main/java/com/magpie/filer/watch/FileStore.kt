@@ -55,6 +55,7 @@ class FileStore private constructor(private val prefs: SharedPreferences) {
         private const val KEY_LAST_NOTIFICATION = "lastNotification"
         private const val KEY_FILED = "filed"
         private const val KEY_RULES = "rules"
+        private const val KEY_EXTRA_ROOTS = "extraRoots"
 
         /**
          * Enough to clear up a real backlog, few enough that the list stays
@@ -330,6 +331,32 @@ class FileStore private constructor(private val prefs: SharedPreferences) {
     fun setLibrary(tree: Uri?) {
         prefs.edit().putString(KEY_LIBRARY, tree?.toString()).apply()
         _suggestions.value = _suggestions.value.copy(library = tree)
+    }
+
+    // ---- folders you added yourself ----------------------------------------
+
+    private val _extraRoots = MutableStateFlow(
+        prefs.getStringSet(KEY_EXTRA_ROOTS, emptySet()).orEmpty().sorted()
+    )
+
+    /**
+     * Folders the user asked Magpie to watch on top of the built-in ones.
+     * Paths, not tree URIs: the watcher needs a real path to put a FileObserver
+     * on, which is also why only folders on your own storage can be added.
+     */
+    val extraRoots: StateFlow<List<String>> = _extraRoots.asStateFlow()
+
+    fun addRoot(path: String) {
+        synchronized(lock) { saveRoots((_extraRoots.value + path).distinct().sorted()) }
+    }
+
+    fun removeRoot(path: String) {
+        synchronized(lock) { saveRoots(_extraRoots.value - path) }
+    }
+
+    private fun saveRoots(paths: List<String>) {
+        prefs.edit().putStringSet(KEY_EXTRA_ROOTS, paths.toSet()).apply()
+        _extraRoots.value = paths
     }
 
     // ---- rules -------------------------------------------------------------

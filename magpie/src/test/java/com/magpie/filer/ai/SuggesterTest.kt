@@ -9,6 +9,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -338,6 +339,143 @@ class SuggesterTest {
         assertTrue(result.toString(), result is SuggestionResult.Failed)
         assertTrue((result as SuggestionResult.Failed).reason.contains("no API key saved"))
         assertEquals("nothing should have been sent", 0, server.requestCount)
+    }
+
+    // ---- asking about several at once --------------------------------------
+
+    private fun others(vararg names: String) = names.map { name ->
+        SpottedFile(
+            path = "/storage/emulated/0/Download/$name",
+            name = name,
+            size = 1_000L,
+            source = "Downloads",
+            spottedAt = 0L,
+        )
+    }
+
+    private fun batchReply(vararg entries: String) {
+        answer(
+            200,
+            """
+            {
+              "id": "msg_01", "type": "message", "role": "assistant",
+              "model": "claude-opus-5",
+              "content": [{"type": "text", "text": ${JSONObject.quote(
+                  """{"files":[${entries.joinToString(",")}]}"""
+              )}}],
+              "stop_reason": "end_turn",
+              "usage": {"input_tokens": 100, "output_tokens": 40}
+            }
+            """.trimIndent(),
+        )
+    }
+
+    @Test
+    fun `one request covers every file in the batch`() {
+        val files = others("a.pdf", "b.pdf", "c.pdf")
+        batchReply(
+            """{"given":"a.pdf","name":"Alpha.pdf","folder":"Invoices","reason":"x"}""",
+            """{"given":"b.pdf","name":"Beta.pdf","folder":"","reason":"y"}""",
+            """{"given":"c.pdf","name":"Gamma.pdf","folder":"","reason":"z"}""",
+        )
+
+        val answers = runBlocking {
+            Suggester.suggestMany(files, listOf("Invoices"), "sk-ant-x", baseUrl)
+        }
+
+        assertEquals(1, server.requestCount)
+        assertEquals(3, answers.size)
+        assertEquals("Alpha.pdf", answers[files[0].path]?.name)
+        assertEquals("Invoices", answers[files[0].path]?.folder)
+        assertEquals("Gamma.pdf", answers[files[2].path]?.name)
+    }
+
+    @Test
+    fun `every file's metadata is in the one request, and no contents`() {
+        val files = others("first.pdf", "second.pdf")
+        batchReply("""{"given":"first.pdf","name":"One.pdf","folder":"","reason":"x"}""")
+        runBlocking { Suggester.suggestMany(files, emptyList(), "sk-ant-x", baseUrl) }
+
+        val body = requireNotNull(server.takeRequest(2, TimeUnit.SECONDS)?.body?.readUtf8())
+        assertTrue(body, body.contains("first.pdf"))
+        assertTrue(body, body.contains("second.pdf"))
+        assertFalse("no path on disk", body.contains("/storage/emulated/0"))
+    }
+
+    @Test
+    fun `an answer is matched by name, so a reordered reply cannot cross files`() {
+        val files = others("a.pdf", "b.pdf")
+        // Deliberately the wrong way round.
+        batchReply(
+            """{"given":"b.pdf","name":"Bee.pdf","folder":"","reason":"y"}""",
+            """{"given":"a.pdf","name":"Ay.pdf","folder":"","reason":"x"}""",
+        )
+
+        val answers = runBlocking { Suggester.suggestMany(files, emptyList(), "sk-ant-x", baseUrl) }
+
+        assertEquals("Ay.pdf", answers[files[0].path]?.name)
+        assertEquals("Bee.pdf", answers[files[1].path]?.name)
+    }
+
+    @Test
+    fun `a file the reply skipped simply has no suggestion`() {
+        val files = others("a.pdf", "b.pdf")
+        batchReply("""{"given":"a.pdf","name":"Ay.pdf","folder":"","reason":"x"}""")
+
+        val answers = runBlocking { Suggester.suggestMany(files, emptyList(), "sk-ant-x", baseUrl) }
+
+        assertEquals(1, answers.size)
+        assertNull(answers[files[1].path])
+    }
+
+    @Test
+    fun `an answer for a file that was never sent is ignored`() {
+        val files = others("a.pdf")
+        batchReply(
+            """{"given":"a.pdf","name":"Ay.pdf","folder":"","reason":"x"}""",
+            """{"given":"never-sent.pdf","name":"Nope.pdf","folder":"","reason":"?"}""",
+        )
+
+        val answers = runBlocking { Suggester.suggestMany(files, emptyList(), "sk-ant-x", baseUrl) }
+
+        assertEquals(1, answers.size)
+        assertEquals("Ay.pdf", answers[files[0].path]?.name)
+    }
+
+    @Test
+    fun `a batch answer is re-cleaned the same way a single one is`() {
+        val files = others("a.pdf")
+        batchReply("""{"given":"a.pdf","name":"../../etc/passwd.exe","folder":"","reason":"x"}""")
+
+        val name = runBlocking {
+            Suggester.suggestMany(files, emptyList(), "sk-ant-x", baseUrl)
+        }[files[0].path]?.name
+
+        assertNotNull(name)
+        assertFalse(name!!, name.contains("/"))
+        assertTrue(name, name.endsWith(".pdf"))
+    }
+
+    @Test
+    fun `a batch that fails yields nothing rather than throwing`() {
+        answer(500, """{"type":"error","error":{"type":"api_error","message":"no"}}""")
+        val answers = runBlocking {
+            Suggester.suggestMany(others("a.pdf"), emptyList(), "sk-ant-x", baseUrl)
+        }
+        assertEquals(emptyMap<String, FilingSuggestion>(), answers)
+    }
+
+    @Test
+    fun `no files and no key both mean no request`() {
+        assertEquals(
+            emptyMap<String, FilingSuggestion>(),
+            runBlocking { Suggester.suggestMany(emptyList(), emptyList(), "sk-ant-x", baseUrl) },
+        )
+        assertEquals(
+            emptyMap<String, FilingSuggestion>(),
+            runBlocking { Suggester.suggestMany(others("a.pdf"), emptyList(), "  ", baseUrl) },
+        )
+        assertEquals(0, server.requestCount)
     }
 
     @Test
