@@ -107,15 +107,23 @@ object Suggester {
     private var clientKey: String? = null
 
     @Synchronized
-    private fun clientFor(apiKey: String): AnthropicClient {
+    private fun clientFor(apiKey: String, baseUrl: String?): AnthropicClient {
+        val cacheKey = "$baseUrl\u0000$apiKey"
         val existing = client
-        if (existing != null && clientKey == apiKey) return existing
-        val fresh = AnthropicOkHttpClient.builder()
+        if (existing != null && clientKey == cacheKey) return existing
+        val builder = AnthropicOkHttpClient.builder()
             .apiKey(apiKey)
             .timeout(TIMEOUT)
-            .build()
+            // The SDK retries twice by default with a backoff between. Someone
+            // is standing there holding the phone waiting for this, so one
+            // retry is the most that is worth their time; past that they would
+            // rather be told and get on with filing it themselves. Under test
+            // there is nothing transient to ride out, so none.
+            .maxRetries(if (baseUrl == null) 1 else 0)
+        if (baseUrl != null) builder.baseUrl(baseUrl)
+        val fresh = builder.build()
         client = fresh
-        clientKey = apiKey
+        clientKey = cacheKey
         return fresh
     }
 
@@ -123,17 +131,25 @@ object Suggester {
      * Ask about one file. [folders] are the names Claude may choose between;
      * pass an empty list when there is no library folder set, and it will only
      * suggest a name.
+     *
+     * [baseUrl] exists so the tests can point the whole call at a local HTTP
+     * server and check what actually goes on the wire — that the request is
+     * shaped the way the API documents, and that every kind of reply and
+     * failure is handled. The app never passes it, so production always talks
+     * to Anthropic.
      */
     suspend fun suggest(
         file: SpottedFile,
         folders: List<String>,
         apiKey: String,
-    ): SuggestionResult = withContext(Dispatchers.IO) { ask(file, folders, apiKey) }
+        baseUrl: String? = null,
+    ): SuggestionResult = withContext(Dispatchers.IO) { ask(file, folders, apiKey, baseUrl) }
 
     private fun ask(
         file: SpottedFile,
         folders: List<String>,
         apiKey: String,
+        baseUrl: String?,
     ): SuggestionResult {
         if (apiKey.isBlank()) {
             return SuggestionResult.Failed(
@@ -164,7 +180,7 @@ object Suggester {
             .build()
 
         return try {
-            read(clientFor(apiKey).messages().create(params), file)
+            read(clientFor(apiKey, baseUrl).messages().create(params), file)
         } catch (e: UnauthorizedException) {
             SuggestionResult.Failed(
                 "Anthropic rejected the API key. Check it in Magpie's settings — it should " +

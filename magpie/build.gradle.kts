@@ -38,6 +38,12 @@ android {
         compose = true
     }
 
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
+
     // The Anthropic SDK brings Jackson and OkHttp, whose licence and notice
     // files collide when several jars are merged into one APK.
     packaging {
@@ -74,6 +80,14 @@ dependencies {
     implementation(libs.androidx.material3)
 
     testImplementation(libs.junit)
+    // Robolectric runs the real Android framework on the JVM, which is the only
+    // way to exercise SafDocumentStore against a genuine DocumentsProvider
+    // without a device.
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
+    // Unit tests get a stubbed android.jar whose org.json throws on every call.
+    // The real one on the test classpath lets Suggester's parsing be tested.
+    testImplementation(libs.org.json)
 
     debugImplementation(libs.androidx.ui.tooling)
 }
