@@ -273,7 +273,12 @@ fun MagpieScreen(viewModel: MainViewModel) {
     }
 
     when (val current = step) {
-        is FilingStep.Consulting -> WorkingDialog("Asking Claude about ${current.file.name}…")
+        is FilingStep.Consulting -> WorkingDialog(
+            message = "Asking Claude about ${current.file.name}…",
+            // Asking can take most of a minute on a poor connection, and no
+            // convenience gets to hold a file hostage for that long.
+            onSkip = viewModel::skipSuggestion,
+        )
 
         is FilingStep.Suggested -> SuggestionDialog(
             step = current,
@@ -718,10 +723,16 @@ private fun RenameDialog(
 }
 
 @Composable
-private fun WorkingDialog(message: String) {
+private fun WorkingDialog(message: String, onSkip: (() -> Unit)? = null) {
     AlertDialog(
-        onDismissRequest = {},
-        confirmButton = {},
+        // A move in progress cannot be abandoned safely, so it has no way out;
+        // anything that passes onSkip can be given up on without risk.
+        onDismissRequest = onSkip ?: {},
+        confirmButton = {
+            if (onSkip != null) {
+                TextButton(onClick = onSkip) { Text("Skip and file it myself") }
+            }
+        },
         text = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 CircularProgressIndicator(modifier = Modifier.size(24.dp))

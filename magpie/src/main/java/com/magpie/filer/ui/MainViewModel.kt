@@ -25,6 +25,7 @@ import com.magpie.filer.watch.WatchService
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -149,6 +150,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private var nextToken = 1L
+
+    /** The in-flight question to Claude, so it can be given up on. */
+    private var consultJob: Job? = null
 
     override fun onCleared() {
         scope.cancel()
@@ -325,7 +329,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         _step.value = FilingStep.Consulting(file)
-        scope.launch { consult(file, settings.apiKey, settings.library) }
+        consultJob = scope.launch { consult(file, settings.apiKey, settings.library) }
+    }
+
+    /**
+     * Stop waiting on Claude and file the ordinary way. Asking can take the
+     * better part of a minute on a bad connection, and nothing in this app is
+     * allowed to stand between someone and their file for that long.
+     */
+    fun skipSuggestion() {
+        val waiting = _step.value as? FilingStep.Consulting ?: return
+        consultJob?.cancel()
+        consultJob = null
+        _step.value = FilingStep.ChooseFolder(nextToken++, listOf(waiting.file), lastDestination)
     }
 
     /**

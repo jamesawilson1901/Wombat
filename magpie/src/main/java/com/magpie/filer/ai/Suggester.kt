@@ -64,27 +64,38 @@ object Suggester {
             "reason: one short sentence in plain English, at most fifteen words, saying why. " +
             "If you are unsure, say so here rather than guessing in the other two fields."
 
-    private val SCHEMA: JsonValue = JsonValue.from(
-        mapOf(
-            "type" to "object",
-            "additionalProperties" to false,
-            "required" to listOf("name", "folder", "reason"),
-            "properties" to mapOf(
-                "name" to mapOf(
-                    "type" to "string",
-                    "description" to "The filename to use, including the original extension.",
-                ),
-                "folder" to mapOf(
-                    "type" to "string",
-                    "description" to "One of the offered folder names, or an empty string.",
-                ),
-                "reason" to mapOf(
-                    "type" to "string",
-                    "description" to "One short sentence, at most fifteen words.",
-                ),
+    /**
+     * The reply's shape, so the three fields always come back and always come
+     * back as strings. The schema is spelled out as free-form properties
+     * because that is the only thing [JsonOutputFormat.Schema] accepts.
+     */
+    private val SCHEMA: JsonOutputFormat.Schema = JsonOutputFormat.Schema.builder()
+        .putAdditionalProperty("type", JsonValue.from("object"))
+        .putAdditionalProperty("additionalProperties", JsonValue.from(false))
+        .putAdditionalProperty(
+            "required",
+            JsonValue.from(listOf("name", "folder", "reason")),
+        )
+        .putAdditionalProperty(
+            "properties",
+            JsonValue.from(
+                mapOf(
+                    "name" to mapOf(
+                        "type" to "string",
+                        "description" to "The filename to use, including the original extension.",
+                    ),
+                    "folder" to mapOf(
+                        "type" to "string",
+                        "description" to "One of the offered folder names, or an empty string.",
+                    ),
+                    "reason" to mapOf(
+                        "type" to "string",
+                        "description" to "One short sentence, at most fifteen words.",
+                    ),
+                )
             ),
         )
-    )
+        .build()
 
     // One client for the app, rebuilt only if the key changes. Each client holds
     // its own connection and thread pools, so making one per request would be
@@ -198,9 +209,9 @@ object Suggester {
         // stopDetails is populated only for a refusal, so its presence is the check.
         val refusal = message.stopDetails().orElse(null)
         if (refusal != null) {
+            val category = refusal.category().map { it.asString() }.orElse("no reason given")
             return SuggestionResult.Failed(
-                "Claude declined to answer for this file (${refusal.category()}). " +
-                    "Name it yourself below."
+                "Claude declined to answer for this file ($category). Name it yourself below."
             )
         }
 

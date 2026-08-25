@@ -134,6 +134,11 @@ What that means in practice: the first thing to try is one small file, into a
 folder on internal storage, and check the copy arrived before trusting it with
 anything that matters. Then try one onto the SD card.
 
+- **No request has ever been made to Anthropic from this code.** The suggestion
+  path compiles, and the SDK call is built against the published API, but it has
+  not been run once — not on a device, not on a desktop, not with a real key.
+  The first suggestion you ask for is the first time that code executes.
+
 The specific things worth watching for, because they are the least certain:
 
 - **The `specialUse` foreground service type.** If ColorOS objects to it, the
@@ -152,6 +157,15 @@ The specific things worth watching for, because they are the least certain:
 - **Whether `DocumentsContract.createDocument` keeps your extension** for a file
   type outside the built-in table. If a provider appends its own, the outcome
   message tells you the name it actually used.
+- **The Anthropic SDK on Android.** It is a Java library built for a server, not
+  an Android one: it pulls in OkHttp and Jackson, and its jar is merged into the
+  APK. It compiles, and it needs nothing above API 30, but a class-loading
+  failure at runtime is the plausible way this breaks. The one place it is
+  called catches `Throwable` for exactly that reason, so a failure costs you the
+  suggestion and nothing else.
+- **Release builds are unproven with it.** `isMinifyEnabled` is on for release
+  and `proguard-rules.pro` now carries keep rules for the SDK and Jackson, but
+  CI only ever builds the debug APK, so no shrunk build has been produced.
 
 ## Known limits, honestly
 
@@ -187,11 +201,72 @@ Kotlin 2.2, AGP 8.11, Compose BOM 2025.06.01.
 Unit tests cover the parts worth testing without a device: filename tidying and
 suggestion building, size and file-type wording, and the finished-arriving rule.
 
-## No network
+## Naming suggestions, and the one thing that leaves the phone
 
-Magpie makes no network calls of any kind — no analytics, no crash reporting, no
-update checks, no accounts. It does not request the `INTERNET` permission, so
-the platform itself would refuse one. It works fully offline.
+This is the only part of Magpie that touches the network, and it is off until
+you switch it on.
+
+**Turning it on.** Settings, in the app: paste an Anthropic API key, flick
+*Suggest names and folders*, and — optionally — pick a **library folder**. The
+library folder is the one your filing folders live inside; Magpie lists the
+folders directly inside it and those are the only destinations Claude is allowed
+to choose between.
+
+**What is sent, per file:** the filename, its size, its type, the name of the
+folder it landed in, and the names of the folders in your library. That is all.
+**The file itself is never opened, let alone sent.** Magpie has no code that
+reads a file's contents for this — it only ever copies bytes from one place to
+another when you file something.
+
+**What comes back:** a proposed name, one of the folder names you offered (or
+none), and one sentence saying why. You get a *Use this* / *Choose myself*
+choice; nothing moves until you have picked a folder in the system picker, and
+the proposed name lands in the rename box pre-filled and editable, exactly like
+a locally tidied one.
+
+**What is not trusted.** Claude's answer is put back through the same sanitising
+a hand-typed name gets, and the extension is reattached from the original, so a
+bad reply cannot produce a path separator, a hidden dotfile, or a changed file
+type. A suggested folder is only accepted if it matches a folder Magpie actually
+listed — an invented folder name is discarded and you pick by hand.
+
+**Where the key lives.** In Magpie's own `SharedPreferences`, private to the app
+and unreadable by any other app. It is never logged and never sent anywhere
+except as the authorisation header on the request to Anthropic. It is not
+encrypted at rest, so a rooted phone or a full-device backup would expose it;
+`allowBackup` is off, which covers the ordinary case. Delete it by clearing the
+field.
+
+**Cost.** Billed to your own Anthropic account, not to anything of Magpie's. One
+request per file you tap, using `claude-opus-5` at low effort with a 2,048-token
+cap; the prompt is a few hundred tokens and the reply is a few dozen. Nothing
+runs in the background — no request is ever made unless you tapped a file.
+
+**Failures never block filing.** No key, no network, a rejected key, a rate
+limit, a refusal, a reply Magpie cannot read: each one becomes a sentence in the
+app saying what actually happened, and the folder picker opens anyway. While it
+is waiting, the dialog has a *Skip and file it myself* button, so a slow
+connection costs you a tap rather than a minute. A suggestion is a convenience,
+and it is never the thing standing between you and your file.
+
+**What it has never been told.** The prompt gets the filename and nothing more,
+so a suggestion cannot know the date, the site the file came from, or what is
+inside it — the same rule the local tidying follows. If it guesses at any of
+those from the name alone, it is guessing, and the one-line reason is there so
+you can see whether it was.
+
+## Working offline
+
+With suggestions switched off — the state it installs in — Magpie makes no
+network calls of any kind. No analytics, no crash reporting, no update checks,
+no accounts, and nothing in it phones home. Everything except the suggestion
+step works with the phone in aeroplane mode, and the suggestion step degrades to
+a visible "could not reach Anthropic" and the ordinary flow.
+
+Magpie does declare the `INTERNET` permission, because the platform would
+otherwise refuse the request even when you have asked for it. This is a
+deliberate reversal of the original design, which forbade the permission
+outright; it was reversed on request, to add this feature.
 
 ## Permissions, and why
 
@@ -202,6 +277,7 @@ the platform itself would refuse one. It works fully offline.
 | `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_DATA_SYNC` | Keep watching while the app is closed. |
 | `FOREGROUND_SERVICE_SPECIAL_USE` | From Android 15, a `dataSync` foreground service is capped at six hours a day, which would stop the watcher mid-day with no warning. `specialUse` has no cap. Both types are declared; `specialUse` is used from API 34 up. |
 | `RECEIVE_BOOT_COMPLETED` | Resume watching after a reboot, but only if it was on. |
+| `INTERNET` | One request to Anthropic per file you tap, and only with naming suggestions switched on and your own API key saved. Nothing else in the app uses it. See [Naming suggestions](#naming-suggestions-and-the-one-thing-that-leaves-the-phone). |
 
 Destinations are written through the Storage Access Framework
 (`OPEN_DOCUMENT_TREE`), not raw paths, so filing onto an SD card works properly.
