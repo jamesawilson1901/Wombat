@@ -81,10 +81,13 @@ sealed interface FilingStep {
         val prefill: String? = null,
     ) : FilingStep
 
+    /**
+     * Naming comes before choosing a folder, because the name is what decides
+     * the folder. You call it what it is; the rule that matches that name then
+     * puts the picker where that kind of thing goes.
+     */
     data class Rename(
         val file: SpottedFile,
-        val tree: Uri,
-        val destination: String,
         val initial: String,
         val suggestions: List<String>,
     ) : FilingStep
@@ -338,19 +341,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         val settings = store.suggestions.value
 
-        // A rule you already agreed to answers instantly, offline, and costs
-        // nothing. Only a file no rule covers is worth asking about.
-        val rule = Rules.match(file.name, store.rules.value)
-        if (rule != null) {
-            scope.launch { fileByRule(file, rule, settings.library) }
-            return
-        }
-
-        // An answer already in hand from a batch is used rather than asked for
-        // again — that is the whole point of having asked in bulk.
+        // An answer already in hand from a batch fills the name box straight
+        // away — that is the whole point of having asked in bulk.
         val held = takeBatchAnswer(file)
         if (held != null) {
-            scope.launch { offerSuggestion(file, held, settings.library) }
+            _step.value = askName(file, prefill = held.name)
             return
         }
 
@@ -360,98 +355,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         _step.value = FilingStep.Consulting(file)
         consultJob = scope.launch { consult(file, settings.apiKey, settings.library) }
-    }
-
-    /**
-     * File by a rule: open the picker already at the folder the rule names, so
-     * the rule saves the choosing without ever taking it away. Nothing is
-     * copied until the user has confirmed the folder, exactly as before.
-     */
-    private suspend fun fileByRule(file: SpottedFile, rule: Rule, library: Uri?) {
-        val at = library?.let { lib ->
-            when (val listing = withContext(Dispatchers.IO) { LibraryFolders.list(app, lib) }) {
-                is LibraryListing.Folders ->
-                    listing.folders.firstOrNull { it.name == rule.folder }
-                        ?.let { LibraryFolders.uriFor(lib, it.documentId) }
-
-                is LibraryListing.Failed -> {
-                    store.report(listing.reason)
-                    null
-                }
-            }
-        }
-        if (at == null && library != null) {
-            store.report(
-                "The rule \"${rule.describe()}\" points at a folder called \"${rule.folder}\", " +
-                    "which is not in your library any more. Choose where it goes and the " +
-                    "rule will be left for you to fix or remove."
-            )
-        }
-        _step.value = FilingStep.ChooseFolder(
-            token = nextToken++,
-            files = listOf(file),
-            openAt = at ?: lastDestination,
-        )
-    }
-
-    /**
-     * Ask about everything on the waiting list in one request.
-     *
-     * Switching suggestions on with a backlog means a request per file
-     * otherwise. Answers are held and used as each file is filed, so the
-     * waiting is done once rather than every time you tap something.
-     */
-    fun suggestForWaiting() {
-        val settings = store.suggestions.value
-        if (!settings.usable) {
-            store.report("Turn on Ask Claude for a name and save an API key first.")
-            return
-        }
-        val files = waiting.value.take(Suggester.BATCH_LIMIT)
-        if (files.isEmpty()) {
-            store.report("Nothing is waiting, so there is nothing to ask about.")
-            return
-        }
-        if (_step.value !is FilingStep.Idle) {
-            store.report("Magpie is busy filing. Finish that first.")
-            return
-        }
-
-        _step.value = FilingStep.Working("Asking Claude about ${files.size} files…")
-        scope.launch {
-            val folders = settings.library?.let { lib ->
-                when (val listing = withContext(Dispatchers.IO) { LibraryFolders.list(app, lib) }) {
-                    is LibraryListing.Folders -> listing.folders
-                    is LibraryListing.Failed -> {
-                        store.report(listing.reason)
-                        emptyList()
-                    }
-                }
-            }.orEmpty()
-
-            val answers = Suggester.suggestMany(files, folders.map { it.name }, settings.apiKey)
-            _batchSuggestions.value = answers
-            _step.value = FilingStep.Idle
-            store.report(
-                if (answers.isEmpty()) {
-                    "Claude had nothing to suggest for those, or the request did not get " +
-                        "through. Filing works as usual."
-                } else {
-                    "Suggestions ready for ${answers.size} of ${files.size}. Tap a file to " +
-                        "file it and its suggestion is already there — no more waiting."
-                }
-            )
-        }
-    }
-
-    /** Answers from the last batch, used up as each file is filed. */
-    private val _batchSuggestions = MutableStateFlow<Map<String, Suggestion>>(emptyMap())
-    val batchSuggestions: StateFlow<Map<String, Suggestion>> = _batchSuggestions.asStateFlow()
-
-    private fun takeBatchAnswer(file: SpottedFile): Suggestion? {
-        val answer = _batchSuggestions.value[file.path] ?: return null
-        _batchSuggestions.value = _batchSuggestions.value - file.path
-        return answer
     }
 
     fun addRule(rule: Rule) = store.addRule(rule)
@@ -467,7 +370,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val waiting = _step.value as? FilingStep.Consulting ?: return
         consultJob?.cancel()
         consultJob = null
-        _step.value = FilingStep.ChooseFolder(nextToken++, listOf(waiting.file), lastDestination)
+        _step.value = askName(waiting.file, prefill = null)
     }
 
     /**
@@ -492,7 +395,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             is SuggestionResult.Failed -> {
                 store.report(result.reason)
                 if (_step.value is FilingStep.Consulting) {
-                    _step.value = FilingStep.ChooseFolder(nextToken++, listOf(file), lastDestination)
+                    _step.value = askName(file, prefill = null)
                 }
             }
 
@@ -537,21 +440,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun acceptSuggestion() {
         val suggested = _step.value as? FilingStep.Suggested ?: return
-        _step.value = FilingStep.ChooseFolder(
-            token = nextToken++,
-            files = listOf(suggested.file),
-            openAt = suggested.folderUri ?: lastDestination,
-            prefill = suggested.suggestion.name,
-        )
+        _step.value = askName(suggested.file, prefill = suggested.suggestion.name)
     }
 
     fun declineSuggestion() {
         val suggested = _step.value as? FilingStep.Suggested ?: return
-        _step.value = FilingStep.ChooseFolder(
-            token = nextToken++,
-            files = listOf(suggested.file),
-            openAt = lastDestination,
-        )
+        _step.value = askName(suggested.file, prefill = null)
     }
 
     /** Start filing everything ticked. Renaming is skipped for a batch. */
@@ -564,9 +458,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** False when a filing flow is already in progress, so nothing is stranded. */
     private fun startFiling(files: List<SpottedFile>): Boolean {
         if (_step.value !is FilingStep.Idle) return false
-        _step.value = FilingStep.ChooseFolder(nextToken++, files, lastDestination)
+        _step.value = if (files.size == 1) {
+            askName(files.first(), prefill = null)
+        } else {
+            // A batch shares one name at best, so there is nothing to type.
+            FilingStep.ChooseFolder(nextToken++, files, lastDestination)
+        }
         return true
     }
+
+    /** The rename step for one file, with [prefill] leading the suggestions. */
+    private fun askName(file: SpottedFile, prefill: String?): FilingStep.Rename =
+        FilingStep.Rename(
+            file = file,
+            initial = prefill ?: file.name,
+            suggestions = (listOfNotNull(prefill) + Naming.suggestions(file.name)).distinct(),
+        )
 
     fun onFolderChosen(uri: Uri?) {
         val pending = _step.value as? FilingStep.ChooseFolder
@@ -603,23 +510,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
 
-        val files = pending.files
-        if (files.size == 1) {
-            val only = files.first()
-            // Claude's name, when there is one, leads the list and fills the
-            // box; the locally tidied names sit under it as alternatives.
-            val options = (listOfNotNull(pending.prefill) + Naming.suggestions(only.name))
-                .distinct()
-            _step.value = FilingStep.Rename(
-                file = only,
-                tree = uri,
-                destination = Destinations.label(app, uri),
-                initial = pending.prefill ?: only.name,
-                suggestions = options,
-            )
-        } else {
-            startMoves(files, uri, rename = null)
-        }
+        // The name was settled before the picker opened, so this is the last
+        // step: prefill carries it, and null means a batch keeping its names.
+        startMoves(pending.files, uri, rename = pending.prefill)
     }
 
     fun confirmRename(newName: String) {
@@ -638,7 +531,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _step.value = FilingStep.Idle
             return
         }
-        startMoves(listOf(renaming.file), renaming.tree, rename = candidate)
+        // The name you just typed is what decides where it goes. A rule that
+        // matches it opens the picker at that folder — which is why naming
+        // first works where guessing from a download's own filename does not.
+        val rule = Rules.match(candidate, store.rules.value)
+        scope.launch {
+            val at = rule?.let { folderUriFor(it.folder) }
+            if (rule != null && at == null && store.suggestions.value.library != null) {
+                store.report(
+                    "The rule \"${rule.describe()}\" points at \"${rule.folder}\", which is " +
+                        "not in your library any more. Choose where it goes and fix or " +
+                        "forget the rule when you like."
+                )
+            }
+            _step.value = FilingStep.ChooseFolder(
+                token = nextToken++,
+                files = listOf(renaming.file),
+                openAt = at ?: lastDestination,
+                prefill = candidate,
+            )
+        }
+    }
+
+    /** Where a rule's folder actually is, when the library can be read. */
+    private suspend fun folderUriFor(name: String): Uri? {
+        val library = store.suggestions.value.library ?: return null
+        val listing = withContext(Dispatchers.IO) { LibraryFolders.list(app, library) }
+        val folders = when (listing) {
+            is LibraryListing.Folders -> listing.folders
+            is LibraryListing.Failed -> return null
+        }
+        val match = folders.firstOrNull { it.name == name } ?: return null
+        return LibraryFolders.uriFor(library, match.documentId)
     }
 
     fun cancelFiling() {

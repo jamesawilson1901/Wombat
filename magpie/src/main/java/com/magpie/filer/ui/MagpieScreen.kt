@@ -471,6 +471,7 @@ fun MagpieScreen(viewModel: MainViewModel) {
 
         is FilingStep.Rename -> RenameDialog(
             step = current,
+            rules = rules,
             onConfirm = viewModel::confirmRename,
             onCancel = viewModel::cancelFiling,
         )
@@ -1018,6 +1019,7 @@ private fun BuildReportDialog(report: BuildReport, onDismiss: () -> Unit) {
 @Composable
 private fun RenameDialog(
     step: FilingStep.Rename,
+    rules: List<Rule>,
     onConfirm: (String) -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -1029,6 +1031,10 @@ private fun RenameDialog(
     val finalName = Naming.withExtensionOf(Naming.sanitise(name), step.file.name)
     val usable = Naming.isUsable(finalName)
 
+    // Which rule this name will fire, shown as you type so the folder is never
+    // a surprise a step later.
+    val willMatch = if (usable) Rules.match(finalName, rules) else null
+
     AlertDialog(
         onDismissRequest = onCancel,
         title = { Text("Name it") },
@@ -1038,7 +1044,8 @@ private fun RenameDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
-                    text = "Copying to ${step.destination}.",
+                    text = "Call it what it is. The name decides where it goes: a rule " +
+                        "that matches it opens the folder picker already at that folder.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1064,6 +1071,14 @@ private fun RenameDialog(
                         MaterialTheme.colorScheme.error
                     },
                 )
+                if (willMatch != null) {
+                    Text(
+                        text = "That name matches a rule: the picker will open at " +
+                            "\"${willMatch.folder}\".",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 if (step.suggestions.size > 1) {
                     Text(
                         text = "OR USE",

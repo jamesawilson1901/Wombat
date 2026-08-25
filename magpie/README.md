@@ -307,17 +307,30 @@ notification never dismisses the file** — it stays in the waiting list. There 
 also a quiet, permanent notice while watching is on, with a *Stop watching*
 button.
 
-## Renaming
+## Naming, and why it comes first
 
-After you pick a folder, Magpie offers the original name pre-filled and
-editable, plus one or two tidied variants: separators turned back into spaces,
-query strings and URL escapes dropped, hash- and id-shaped runs removed, and
-capitalisation evened out. The extension is always kept. Suggestions are built
-**only from the filename** — never the date, the site it came from, or the
-folder you are filing into. If a tidied name comes out identical to the
-original, it is not offered twice.
+**You name the file before you choose the folder**, and the name is what
+decides the folder.
 
-Renaming is skipped for batch filing.
+That order matters more than it sounds. A download's own filename often says
+nothing useful — `Gen-3 Alpha 4471203.mp4` does not tell anyone which character
+or which shot it is. No amount of cleverness can read a fact that is not in the
+input. But the moment you type `ANNA_REF_03`, the fact is there, and a rule
+matching `anna` can put the picker straight on `01_CHARACTER_MASTERS`.
+
+So: tap the file, name it what it is, and the folder picker opens where that
+kind of thing goes. The dialog tells you which rule your name has matched while
+you are still typing, so the folder is never a surprise a step later.
+
+The box is pre-filled with the original name and offers one or two tidied
+variants: separators turned back into spaces, query strings and URL escapes
+dropped, hash- and id-shaped runs removed, and capitalisation evened out. The
+extension is always kept. Suggestions are built **only from the filename** —
+never the date, the site it came from, or the folder you are filing into. If a
+tidied name comes out identical to the original, it is not offered twice.
+
+Naming is skipped for batch filing, where several files share one destination
+and there is no single name to type.
 
 ## No history, no undo
 
