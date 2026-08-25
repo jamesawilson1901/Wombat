@@ -236,7 +236,7 @@ class SafDocumentStoreTest {
     // ---- the whole thing, through Filing -----------------------------------
 
     @Test
-    fun `filing end to end over real SAF leaves the original and copies the bytes`() {
+    fun `filing end to end over real SAF moves the bytes and removes the original`() {
         val downloads = temp.newFolder("Download")
         val original = File(downloads, "invoice.pdf")
         original.writeText("real content")
@@ -251,8 +251,9 @@ class SafDocumentStoreTest {
         )
 
         assertTrue(outcome.toString(), outcome is MoveOutcome.Copied)
-        assertTrue("the original must survive", original.exists())
         assertEquals("real content", File(root, "invoice.pdf").readText())
+        assertTrue((outcome as MoveOutcome.Copied).originalRemoved)
+        assertFalse("a verified move leaves nothing behind", original.exists())
     }
 
     @Test
@@ -277,7 +278,8 @@ class SafDocumentStoreTest {
             "the new one",
             File(File(root, Safety.DUPLICATES_FOLDER), "report.pdf").readText(),
         )
-        assertTrue("the original must survive", original.exists())
+        assertTrue((outcome as MoveOutcome.Duplicated).originalRemoved)
+        assertFalse("the original goes once its copy verified", original.exists())
     }
 
     @Test
