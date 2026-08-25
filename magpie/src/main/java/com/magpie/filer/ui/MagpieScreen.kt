@@ -549,6 +549,12 @@ fun MagpieScreen(viewModel: MainViewModel) {
             onDecline = viewModel::declineSuggestion,
         )
 
+        is FilingStep.ConfirmBatch -> ConfirmBatchDialog(
+            step = current,
+            onConfirm = viewModel::confirmBatch,
+            onCancel = viewModel::cancelFiling,
+        )
+
         is FilingStep.NameBatch -> BatchNameDialog(
             step = current,
             rules = rules,
@@ -1409,6 +1415,75 @@ private fun ReportDialog(
                 TextButton(onClick = { onRemember(offer); onDismiss() }) { Text("Remember this") }
             }
         },
+    )
+}
+
+@Composable
+private fun ConfirmBatchDialog(
+    step: FilingStep.ConfirmBatch,
+    onConfirm: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("Copy ${step.files.size} into ${step.destination}?") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = "Nothing has been copied yet. This is exactly what will happen, " +
+                        "and originals stay where they are as always.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (step.clashes.isNotEmpty()) {
+                    Text(
+                        text = if (step.clashes.size == 1) {
+                            "One of these names is already taken in ${step.destination} — " +
+                                "that copy will be kept apart in Duplicates, nothing " +
+                                "written over."
+                        } else {
+                            "${step.clashes.size} of these names are already taken in " +
+                                "${step.destination} — those copies will be kept apart in " +
+                                "Duplicates, nothing written over."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                step.listingNote?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                SelectionContainer {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        for (file in step.files) {
+                            val finalName = step.names[file.path] ?: file.name
+                            Text(
+                                text = buildString {
+                                    append(finalName)
+                                    if (finalName != file.name) {
+                                        append("  (was ").append(file.name).append(")")
+                                    }
+                                    if (finalName in step.clashes) append("  → Duplicates")
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) { Text("Copy ${step.files.size} files") }
+        },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
     )
 }
 

@@ -101,6 +101,22 @@ sealed interface FilingStep {
         val suggestions: List<String>,
     ) : FilingStep
 
+    /**
+     * A batch with its folder chosen, shown in full before anything runs:
+     * every final name, and which of them will divert to Duplicates.
+     */
+    data class ConfirmBatch(
+        val files: List<SpottedFile>,
+        val tree: Uri,
+        val destination: String,
+        /** Every file's final name, keyed by its path. */
+        val names: Map<String, String>,
+        /** Final names already present in the destination. */
+        val clashes: Set<String>,
+        /** Set when the destination could not be checked for clashes. */
+        val listingNote: String? = null,
+    ) : FilingStep
+
     data class Working(val message: String) : FilingStep
 
     data class Report(val outcomes: List<MoveOutcome>) : FilingStep
@@ -614,16 +630,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
 
-        // The name was settled before the picker opened, so this is the last
-        // step. A group carries a name per file; a single file carries one in
-        // prefill; a plain batch carries none and every file keeps its own.
-        val names = pendingGroupNames
+        // The name was settled before the picker opened. A single file goes
+        // straight to the copy; a batch stops once more to show exactly what
+        // is about to happen, because a batch is the one place a mistake
+        // multiplies.
+        val renames = pendingGroupNames
         pendingGroupNames = emptyMap()
-        if (names.isNotEmpty()) {
-            startMoves(pending.files, uri, names)
-        } else {
+        if (pending.files.size == 1) {
             startMoves(pending.files, uri, rename = pending.prefill)
+            return
         }
+
+        scope.launch {
+            _step.value = FilingStep.Working("Checking ${Destinations.label(app, uri)}…")
+            val finalNames = pending.files.associate { file ->
+                file.path to (renames[file.path] ?: file.name)
+            }
+            var note: String? = null
+            val taken: Set<String> = withContext(Dispatchers.IO) {
+                try {
+                    SafDocumentStore(app, uri, Destinations.label(app, uri))
+                        .list(null).map { it.name }.toSet()
+                } catch (e: Exception) {
+                    note = "The folder could not be checked for name clashes " +
+                        "(${e.message ?: e.javaClass.simpleName}) — any clash will still " +
+                        "be kept apart during the copy."
+                    emptySet()
+                }
+            }
+            _step.value = FilingStep.ConfirmBatch(
+                files = pending.files,
+                tree = uri,
+                destination = Destinations.label(app, uri),
+                names = finalNames,
+                clashes = finalNames.values.filterTo(HashSet()) { it in taken },
+                listingNote = note,
+            )
+        }
+    }
+
+    /** The preview has been read; run the batch exactly as shown. */
+    fun confirmBatch() {
+        val confirmed = _step.value as? FilingStep.ConfirmBatch ?: return
+        startMoves(confirmed.files, confirmed.tree, confirmed.names)
     }
 
     fun confirmRename(newName: String) {
