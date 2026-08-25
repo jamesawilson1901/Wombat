@@ -9,6 +9,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
+import com.magpie.filer.ai.Rule
+import com.magpie.filer.ai.Rules
 import com.magpie.filer.move.Filed
 import java.io.File
 
@@ -52,6 +54,7 @@ class FileStore private constructor(private val prefs: SharedPreferences) {
         private const val KEY_DESTINATION = "destination"
         private const val KEY_LAST_NOTIFICATION = "lastNotification"
         private const val KEY_FILED = "filed"
+        private const val KEY_RULES = "rules"
 
         /**
          * Enough to clear up a real backlog, few enough that the list stays
@@ -327,6 +330,33 @@ class FileStore private constructor(private val prefs: SharedPreferences) {
     fun setLibrary(tree: Uri?) {
         prefs.edit().putString(KEY_LIBRARY, tree?.toString()).apply()
         _suggestions.value = _suggestions.value.copy(library = tree)
+    }
+
+    // ---- rules -------------------------------------------------------------
+
+    private val _rules = MutableStateFlow(Rules.fromJson(prefs.getString(KEY_RULES, null)))
+
+    /** What the user has told Magpie to do again, in the order it is tried. */
+    val rules: StateFlow<List<Rule>> = _rules.asStateFlow()
+
+    fun addRule(rule: Rule) {
+        if (!rule.usable) return
+        synchronized(lock) {
+            // The same rule twice would only ever fire once; keep one.
+            val kept = _rules.value.filterNot {
+                it.extension == rule.extension && it.word == rule.word
+            }
+            saveRules(kept + rule)
+        }
+    }
+
+    fun removeRule(rule: Rule) {
+        synchronized(lock) { saveRules(_rules.value - rule) }
+    }
+
+    private fun saveRules(rules: List<Rule>) {
+        prefs.edit().putString(KEY_RULES, Rules.toJson(rules)).apply()
+        _rules.value = rules
     }
 
     // ---- what is safe to clear up ------------------------------------------

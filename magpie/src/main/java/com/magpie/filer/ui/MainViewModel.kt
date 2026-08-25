@@ -11,6 +11,8 @@ import com.magpie.filer.ai.FilingSuggestion
 import com.magpie.filer.ai.LibraryFolder
 import com.magpie.filer.ai.LibraryFolders
 import com.magpie.filer.ai.LibraryListing
+import com.magpie.filer.ai.Rule
+import com.magpie.filer.ai.Rules
 import com.magpie.filer.ai.SuggestionResult
 import com.magpie.filer.ai.Suggester
 import com.magpie.filer.core.Naming
@@ -112,6 +114,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val watching: StateFlow<Boolean> = store.watching
     val suggestionSettings = store.suggestions
     val filed = store.filed
+    val rules = store.rules
 
     /** When a service start was last asked for. Read by readReadiness below. */
     private var startRequestedAt = 0L
@@ -328,6 +331,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         val settings = store.suggestions.value
+
+        // A rule you already agreed to answers instantly, offline, and costs
+        // nothing. Only a file no rule covers is worth asking about.
+        val rule = Rules.match(file.name, store.rules.value)
+        if (rule != null) {
+            scope.launch { fileByRule(file, rule, settings.library) }
+            return
+        }
+
         if (!settings.usable) {
             startFiling(listOf(file))
             return
@@ -335,6 +347,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _step.value = FilingStep.Consulting(file)
         consultJob = scope.launch { consult(file, settings.apiKey, settings.library) }
     }
+
+    /**
+     * File by a rule: open the picker already at the folder the rule names, so
+     * the rule saves the choosing without ever taking it away. Nothing is
+     * copied until the user has confirmed the folder, exactly as before.
+     */
+    private suspend fun fileByRule(file: SpottedFile, rule: Rule, library: Uri?) {
+        val at = library?.let { lib ->
+            when (val listing = withContext(Dispatchers.IO) { LibraryFolders.list(app, lib) }) {
+                is LibraryListing.Folders ->
+                    listing.folders.firstOrNull { it.name == rule.folder }
+                        ?.let { LibraryFolders.uriFor(lib, it.documentId) }
+
+                is LibraryListing.Failed -> {
+                    store.report(listing.reason)
+                    null
+                }
+            }
+        }
+        if (at == null && library != null) {
+            store.report(
+                "The rule \"${rule.describe()}\" points at a folder called \"${rule.folder}\", " +
+                    "which is not in your library any more. Choose where it goes and the " +
+                    "rule will be left for you to fix or remove."
+            )
+        }
+        _step.value = FilingStep.ChooseFolder(
+            token = nextToken++,
+            files = listOf(file),
+            openAt = at ?: lastDestination,
+        )
+    }
+
+    fun addRule(rule: Rule) = store.addRule(rule)
+
+    fun removeRule(rule: Rule) = store.removeRule(rule)
 
     /**
      * Stop waiting on Claude and file the ordinary way. Asking can take the

@@ -59,6 +59,8 @@ import androidx.compose.ui.unit.dp
 import com.magpie.filer.R
 import com.magpie.filer.core.Formatting
 import com.magpie.filer.core.Naming
+import com.magpie.filer.ai.Rule
+import com.magpie.filer.ai.Rules
 import com.magpie.filer.move.Destinations
 import com.magpie.filer.move.Filed
 import com.magpie.filer.move.MoveOutcome
@@ -78,12 +80,14 @@ fun MagpieScreen(viewModel: MainViewModel) {
     val step by viewModel.step.collectAsState()
     val inFolders by viewModel.inFolders.collectAsState()
     val filed by viewModel.filed.collectAsState()
+    val rules by viewModel.rules.collectAsState()
     val suggestionSettings by viewModel.suggestionSettings.collectAsState()
 
     val context = LocalContext.current
     var showIgnored by rememberSaveable { mutableStateOf(false) }
     var showInFolders by rememberSaveable { mutableStateOf(false) }
     var showFiled by rememberSaveable { mutableStateOf(false) }
+    var showRules by rememberSaveable { mutableStateOf(false) }
 
     val folderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -233,6 +237,35 @@ fun MagpieScreen(viewModel: MainViewModel) {
 
             item {
                 SectionHeading(
+                    title = if (rules.isEmpty()) "RULES" else "RULES · ${rules.size}",
+                    action = if (showRules) "Hide" else "Show",
+                    onAction = { showRules = !showRules },
+                )
+            }
+            if (showRules) {
+                item {
+                    Text(
+                        text = if (rules.isEmpty()) {
+                            "No rules yet. After you file something, Magpie offers to " +
+                                "remember where that kind of file goes. A rule answers " +
+                                "instantly, works offline, and costs nothing — so the only " +
+                                "files worth asking Claude about are the ones no rule covers."
+                        } else {
+                            "Tried in order, top first. A rule opens the folder picker " +
+                                "already at the right folder; it never files anything " +
+                                "without you confirming."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                items(rules, key = { "rule:" + it.extension + it.word + it.folder }) { rule ->
+                    RuleRow(rule) { viewModel.removeRule(rule) }
+                }
+            }
+
+            item {
+                SectionHeading(
                     title = if (filed.isEmpty()) "SAFE TO CLEAR" else "SAFE TO CLEAR · ${filed.size}",
                     action = if (showFiled) "Hide" else "Show",
                     onAction = {
@@ -336,7 +369,17 @@ fun MagpieScreen(viewModel: MainViewModel) {
 
         is FilingStep.Working -> WorkingDialog(current.message)
 
-        is FilingStep.Report -> ReportDialog(current.outcomes, viewModel::dismissReport)
+        is FilingStep.Report -> ReportDialog(
+            outcomes = current.outcomes,
+            // Only offer a rule for something no rule already covers, so the
+            // same offer does not come back every time.
+            offer = current.outcomes.singleOrNull()
+                ?.let { it as? MoveOutcome.Copied }
+                ?.takeIf { Rules.match(it.fileName, rules) == null }
+                ?.let { Rules.suggestFor(it.fileName, it.destination) },
+            onRemember = viewModel::addRule,
+            onDismiss = viewModel::dismissReport,
+        )
 
         else -> Unit
     }
@@ -720,6 +763,28 @@ private fun FiledRow(entry: Filed, onDismiss: () -> Unit) {
     }
 }
 
+@Composable
+private fun RuleRow(rule: Rule, onRemove: () -> Unit) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = rule.describe(),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onRemove) { Text("Forget") }
+        }
+    }
+}
+
 // ---- dialogs ---------------------------------------------------------------
 
 @Composable
@@ -830,7 +895,12 @@ private fun WorkingDialog(message: String, onSkip: (() -> Unit)? = null) {
 }
 
 @Composable
-private fun ReportDialog(outcomes: List<MoveOutcome>, onDismiss: () -> Unit) {
+private fun ReportDialog(
+    outcomes: List<MoveOutcome>,
+    offer: Rule?,
+    onRemember: (Rule) -> Unit,
+    onDismiss: () -> Unit,
+) {
     // A duplicate still arrived safely, so it counts as filed; the line
     // underneath says where it actually went.
     val copied = outcomes.count {
@@ -867,9 +937,34 @@ private fun ReportDialog(outcomes: List<MoveOutcome>, onDismiss: () -> Unit) {
                         }
                     }
                 }
+
+                if (offer != null) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Text(
+                        text = "Do this again next time?",
+                        style = SectionLabel,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = offer.describe(),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        text = "A rule opens the picker at that folder straight away, with " +
+                            "no waiting and nothing to pay. You still confirm every file, " +
+                            "and you can forget the rule whenever you like.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+        dismissButton = if (offer == null) null else {
+            {
+                TextButton(onClick = { onRemember(offer); onDismiss() }) { Text("Remember this") }
+            }
+        },
     )
 }
 
