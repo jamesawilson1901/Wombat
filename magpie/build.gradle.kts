@@ -88,6 +88,10 @@ dependencies {
     // Unit tests get a stubbed android.jar whose org.json throws on every call.
     // The real one on the test classpath lets Suggester's parsing be tested.
     testImplementation(libs.org.json)
+    // A real HTTP server to point the Anthropic SDK at, so the request it puts
+    // on the wire can be read back and checked. The JDK's own com.sun.net
+    // .httpserver is not on the Android unit-test compile classpath.
+    testImplementation(libs.mockwebserver)
 
     debugImplementation(libs.androidx.ui.tooling)
 }
