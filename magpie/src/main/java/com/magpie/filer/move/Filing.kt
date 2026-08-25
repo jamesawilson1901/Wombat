@@ -21,6 +21,14 @@ import java.io.IOException
  */
 object Filing {
 
+    /**
+     * Breathing room demanded on top of the file's own size before a copy is
+     * allowed to start: filesystem overhead, and whatever else is writing to
+     * the same volume at the time. Failing cleanly at the last byte is handled,
+     * but refusing before the first one is better.
+     */
+    const val SPACE_MARGIN_BYTES = 8L * 1024 * 1024
+
     fun file(
         source: File,
         originalName: String,
@@ -28,6 +36,7 @@ object Filing {
         store: DocumentStore,
         volumes: List<String>,
         destinationFolder: File?,
+        freeSpaceOf: (File) -> Long = { it.usableSpace },
     ): MoveOutcome {
         val destination = store.label
 
@@ -68,6 +77,23 @@ object Filing {
         }
 
         val expected = source.length()
+
+        // Is there room? Only answerable when the destination is a real path on
+        // the user's own storage; a provider with no path is left to fail its
+        // own way, which the copy checks still catch. A reading of zero means
+        // the volume would not say, and a guess must not become a refusal.
+        if (destinationFolder != null) {
+            val free = freeSpaceOf(destinationFolder)
+            if (free > 0 && free < expected + SPACE_MARGIN_BYTES) {
+                return MoveOutcome.Failed(
+                    originalName,
+                    "There is not enough room in $destination: this file is " +
+                        "${Formatting.fileSize(expected)} and the destination has only " +
+                        "${Formatting.fileSize(free)} free. Nothing was copied — make " +
+                        "some space and try again."
+                )
+            }
+        }
 
         // Is that name already taken? If so the copy is diverted into a
         // Duplicates folder rather than left to the provider, which would

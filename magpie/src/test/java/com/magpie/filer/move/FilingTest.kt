@@ -131,6 +131,88 @@ class FilingTest {
         assertTrue((outcome as MoveOutcome.Failed).reason.contains("says the copy is 3 bytes"))
     }
 
+    // ---- room to land -------------------------------------------------------
+
+    @Test
+    fun `a destination without room refuses before a single byte is copied`() {
+        val original = source("big.bin", "0123456789")
+
+        val outcome = Filing.file(
+            source = original,
+            originalName = original.name,
+            targetName = original.name,
+            store = store,
+            volumes = volumes,
+            destinationFolder = destination,
+            freeSpaceOf = { 5L },
+        )
+
+        assertTrue(outcome.toString(), outcome is MoveOutcome.Failed)
+        val reason = (outcome as MoveOutcome.Failed).reason
+        assertTrue(reason, reason.contains("not enough room"))
+        assertFalse(
+            "nothing may be created when there is no room for it",
+            File(destination, "big.bin").exists(),
+        )
+        assertTrue(original.exists())
+    }
+
+    @Test
+    fun `a nearly full destination is refused even for a small file`() {
+        // The margin exists for filesystem overhead and whoever else is
+        // writing; a volume with only a few hundred bytes left is out of room
+        // for practical purposes whatever the file's size.
+        val original = source("tiny.txt", "hi")
+
+        val outcome = Filing.file(
+            source = original,
+            originalName = original.name,
+            targetName = original.name,
+            store = store,
+            volumes = volumes,
+            destinationFolder = destination,
+            freeSpaceOf = { 500L },
+        )
+
+        assertTrue(outcome.toString(), outcome is MoveOutcome.Failed)
+    }
+
+    @Test
+    fun `enough room lets the copy proceed`() {
+        val original = source("fits.txt", "0123456789")
+
+        val outcome = Filing.file(
+            source = original,
+            originalName = original.name,
+            targetName = original.name,
+            store = store,
+            volumes = volumes,
+            destinationFolder = destination,
+            freeSpaceOf = { 10L + Filing.SPACE_MARGIN_BYTES },
+        )
+
+        assertTrue(outcome.toString(), outcome is MoveOutcome.Copied)
+    }
+
+    @Test
+    fun `a volume that will not say how much room it has is not refused on a guess`() {
+        // File.usableSpace reports zero when it cannot tell, which is not the
+        // same as full — refusing on it would block filing for no real reason.
+        val original = source("unknown.txt", "content")
+
+        val outcome = Filing.file(
+            source = original,
+            originalName = original.name,
+            targetName = original.name,
+            store = store,
+            volumes = volumes,
+            destinationFolder = destination,
+            freeSpaceOf = { 0L },
+        )
+
+        assertTrue(outcome.toString(), outcome is MoveOutcome.Copied)
+    }
+
     // ---- duplicates --------------------------------------------------------
 
     @Test
