@@ -9,6 +9,13 @@
         android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
 
+    <!-- The only thing Magpie ever sends anywhere: with naming suggestions
+         switched on and your own API key supplied, one request per file goes to
+         Anthropic carrying the filename, its size and type, and your folder
+         names. Never file contents. With suggestions off, nothing leaves the
+         phone and every other part of the app behaves identically. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />

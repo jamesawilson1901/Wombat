@@ -15,6 +15,18 @@ import java.io.File
 data class Problem(val id: Long, val message: String)
 
 /**
+ * Everything the optional Claude suggestions need. With [enabled] off or
+ * [apiKey] empty, Magpie makes no network calls at all.
+ */
+data class SuggestionSettings(
+    val apiKey: String,
+    val enabled: Boolean,
+    val library: Uri?,
+) {
+    val usable: Boolean get() = enabled && apiKey.isNotBlank()
+}
+
+/**
  * Everything Magpie remembers between runs, and the single source of truth the
  * watcher and the screen both read.
  *
@@ -38,6 +50,9 @@ class FileStore private constructor(private val prefs: SharedPreferences) {
         private const val KEY_WATCHING = "watching"
         private const val KEY_DESTINATION = "destination"
         private const val KEY_LAST_NOTIFICATION = "lastNotification"
+        private const val KEY_API_KEY = "anthropicApiKey"
+        private const val KEY_SUGGESTIONS = "suggestionsEnabled"
+        private const val KEY_LIBRARY = "libraryTree"
 
         /**
          * Only files Magpie has actually offered land here, so this grows with
@@ -272,6 +287,38 @@ class FileStore private constructor(private val prefs: SharedPreferences) {
         set(value) {
             prefs.edit().putString(KEY_LAST_NOTIFICATION, value).apply()
         }
+
+    // ---- naming suggestions ------------------------------------------------
+
+    private val _suggestions = MutableStateFlow(
+        SuggestionSettings(
+            apiKey = prefs.getString(KEY_API_KEY, "").orEmpty(),
+            enabled = prefs.getBoolean(KEY_SUGGESTIONS, false),
+            library = prefs.getString(KEY_LIBRARY, null)?.let(Uri::parse),
+        )
+    )
+    val suggestions: StateFlow<SuggestionSettings> = _suggestions.asStateFlow()
+
+    /**
+     * The key lives in the app's private preferences, which no other app can
+     * read. It is never logged, and never leaves the phone except as the
+     * authorisation header on a request to Anthropic.
+     */
+    fun setApiKey(key: String) {
+        val trimmed = key.trim()
+        prefs.edit().putString(KEY_API_KEY, trimmed).apply()
+        _suggestions.value = _suggestions.value.copy(apiKey = trimmed)
+    }
+
+    fun setSuggestionsEnabled(on: Boolean) {
+        prefs.edit().putBoolean(KEY_SUGGESTIONS, on).apply()
+        _suggestions.value = _suggestions.value.copy(enabled = on)
+    }
+
+    fun setLibrary(tree: Uri?) {
+        prefs.edit().putString(KEY_LIBRARY, tree?.toString()).apply()
+        _suggestions.value = _suggestions.value.copy(library = tree)
+    }
 
     // ---- problems ----------------------------------------------------------
 

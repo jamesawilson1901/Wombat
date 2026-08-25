@@ -37,6 +37,26 @@ android {
     buildFeatures {
         compose = true
     }
+
+    // The Anthropic SDK brings Jackson and OkHttp, whose licence and notice
+    // files collide when several jars are merged into one APK.
+    packaging {
+        resources {
+            excludes += setOf(
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE",
+                "META-INF/LICENSE.txt",
+                "META-INF/LICENSE.md",
+                "META-INF/license.txt",
+                "META-INF/NOTICE",
+                "META-INF/NOTICE.txt",
+                "META-INF/NOTICE.md",
+                "META-INF/notice.txt",
+                "META-INF/INDEX.LIST",
+                "META-INF/{AL2.0,LGPL2.1}",
+            )
+        }
+    }
 }
 
 dependencies {
@@ -46,6 +66,7 @@ dependencies {
     implementation(libs.androidx.documentfile)
     implementation(libs.androidx.activity.compose)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.anthropic.java)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)
     implementation(libs.androidx.ui.graphics)

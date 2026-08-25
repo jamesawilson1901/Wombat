@@ -7,6 +7,12 @@ import android.os.Build
 import android.os.Environment
 import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.AndroidViewModel
+import com.magpie.filer.ai.FilingSuggestion
+import com.magpie.filer.ai.LibraryFolder
+import com.magpie.filer.ai.LibraryFolders
+import com.magpie.filer.ai.LibraryListing
+import com.magpie.filer.ai.SuggestionResult
+import com.magpie.filer.ai.Suggester
 import com.magpie.filer.core.Naming
 import com.magpie.filer.move.Destinations
 import com.magpie.filer.move.MoveOutcome
@@ -40,13 +46,35 @@ sealed interface FilingStep {
 
     data object Idle : FilingStep
 
-    /** [token] makes each request distinct, so the picker opens exactly once. */
-    data class ChooseFolder(val token: Long, val files: List<SpottedFile>) : FilingStep
+    /** Waiting on Claude's opinion about one file. */
+    data class Consulting(val file: SpottedFile) : FilingStep
+
+    /** Claude has answered; the user decides whether to take it. */
+    data class Suggested(
+        val file: SpottedFile,
+        val suggestion: FilingSuggestion,
+        /** Where to open the picker, when the suggested folder was recognised. */
+        val folderUri: Uri?,
+        /** The folder name actually offered, or null when none was matched. */
+        val folderName: String?,
+    ) : FilingStep
+
+    /**
+     * [token] makes each request distinct, so the picker opens exactly once.
+     * [openAt] positions the picker; [prefill] pre-fills the rename step.
+     */
+    data class ChooseFolder(
+        val token: Long,
+        val files: List<SpottedFile>,
+        val openAt: Uri? = null,
+        val prefill: String? = null,
+    ) : FilingStep
 
     data class Rename(
         val file: SpottedFile,
         val tree: Uri,
         val destination: String,
+        val initial: String,
         val suggestions: List<String>,
     ) : FilingStep
 
@@ -78,6 +106,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val ignored: StateFlow<List<SpottedFile>> = store.ignored
     val problems = store.problems
     val watching: StateFlow<Boolean> = store.watching
+    val suggestionSettings = store.suggestions
 
     /** When a service start was last asked for. Read by readReadiness below. */
     private var startRequestedAt = 0L
@@ -184,6 +213,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         store.dismissProblem(id)
     }
 
+    // ---- naming suggestions ------------------------------------------------
+
+    fun setApiKey(key: String) = store.setApiKey(key)
+
+    fun setSuggestionsEnabled(on: Boolean) = store.setSuggestionsEnabled(on)
+
+    /** Remember the folder whose subfolders Claude is allowed to choose between. */
+    fun setLibrary(tree: Uri?) {
+        if (tree == null) {
+            store.setLibrary(null)
+            return
+        }
+        try {
+            app.contentResolver.takePersistableUriPermission(
+                tree,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        } catch (e: SecurityException) {
+            store.report(
+                "Android would not let Magpie keep access to that library folder " +
+                    "(${e.message ?: "permission refused"}), so it cannot be used for " +
+                    "suggestions. Choose a different folder."
+            )
+            return
+        }
+        store.setLibrary(tree)
+    }
+
     /** Read the watched folders so older files can be filed by hand. */
     fun loadInFolders() {
         scope.launch {
@@ -255,12 +312,81 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Start filing one file: the folder picker opens first, every time. */
     fun beginFiling(file: SpottedFile) {
-        if (!startFiling(listOf(file))) {
+        if (_step.value !is FilingStep.Idle) {
             store.report(
                 "Magpie is already filing something. Finish that one — or cancel it — " +
                     "and then tap ${file.name} again."
             )
+            return
         }
+        val settings = store.suggestions.value
+        if (!settings.usable) {
+            startFiling(listOf(file))
+            return
+        }
+        _step.value = FilingStep.Consulting(file)
+        scope.launch { consult(file, settings.apiKey, settings.library) }
+    }
+
+    /**
+     * Ask Claude, then hand the answer to the user. A failure here is reported
+     * and the ordinary flow carries on — a suggestion is a convenience, and it
+     * must never be the thing standing between someone and their file.
+     */
+    private suspend fun consult(file: SpottedFile, apiKey: String, library: Uri?) {
+        val offered: List<LibraryFolder> = if (library == null) {
+            emptyList()
+        } else {
+            when (val listing = withContext(Dispatchers.IO) { LibraryFolders.list(app, library) }) {
+                is LibraryListing.Folders -> listing.folders
+                is LibraryListing.Failed -> {
+                    store.report(listing.reason)
+                    emptyList()
+                }
+            }
+        }
+
+        when (val result = Suggester.suggest(file, offered.map { it.name }, apiKey)) {
+            is SuggestionResult.Failed -> {
+                store.report(result.reason)
+                if (_step.value is FilingStep.Consulting) {
+                    _step.value = FilingStep.ChooseFolder(nextToken++, listOf(file), lastDestination)
+                }
+            }
+
+            is SuggestionResult.Ready -> {
+                // Only a folder Magpie actually offered is accepted, so a
+                // hallucinated name cannot send the picker somewhere odd.
+                val match = offered.firstOrNull { it.name == result.suggestion.folder }
+                if (_step.value is FilingStep.Consulting) {
+                    _step.value = FilingStep.Suggested(
+                        file = file,
+                        suggestion = result.suggestion,
+                        folderUri = match?.let { library?.let { lib -> LibraryFolders.uriFor(lib, match.documentId) } },
+                        folderName = match?.name,
+                    )
+                }
+            }
+        }
+    }
+
+    fun acceptSuggestion() {
+        val suggested = _step.value as? FilingStep.Suggested ?: return
+        _step.value = FilingStep.ChooseFolder(
+            token = nextToken++,
+            files = listOf(suggested.file),
+            openAt = suggested.folderUri ?: lastDestination,
+            prefill = suggested.suggestion.name,
+        )
+    }
+
+    fun declineSuggestion() {
+        val suggested = _step.value as? FilingStep.Suggested ?: return
+        _step.value = FilingStep.ChooseFolder(
+            token = nextToken++,
+            files = listOf(suggested.file),
+            openAt = lastDestination,
+        )
     }
 
     /** Start filing everything ticked. Renaming is skipped for a batch. */
@@ -273,7 +399,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** False when a filing flow is already in progress, so nothing is stranded. */
     private fun startFiling(files: List<SpottedFile>): Boolean {
         if (_step.value !is FilingStep.Idle) return false
-        _step.value = FilingStep.ChooseFolder(nextToken++, files)
+        _step.value = FilingStep.ChooseFolder(nextToken++, files, lastDestination)
         return true
     }
 
@@ -315,11 +441,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val files = pending.files
         if (files.size == 1) {
             val only = files.first()
+            // Claude's name, when there is one, leads the list and fills the
+            // box; the locally tidied names sit under it as alternatives.
+            val options = (listOfNotNull(pending.prefill) + Naming.suggestions(only.name))
+                .distinct()
             _step.value = FilingStep.Rename(
                 file = only,
                 tree = uri,
                 destination = Destinations.label(app, uri),
-                suggestions = Naming.suggestions(only.name),
+                initial = pending.prefill ?: only.name,
+                suggestions = options,
             )
         } else {
             startMoves(files, uri, rename = null)

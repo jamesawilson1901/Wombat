@@ -44,6 +44,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -52,14 +53,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.magpie.filer.R
 import com.magpie.filer.core.Formatting
 import com.magpie.filer.core.Naming
+import com.magpie.filer.move.Destinations
 import com.magpie.filer.move.MoveOutcome
 import com.magpie.filer.ui.theme.SectionLabel
 import com.magpie.filer.watch.SpottedFile
+import com.magpie.filer.watch.SuggestionSettings
 
 @Composable
 fun MagpieScreen(viewModel: MainViewModel) {
@@ -72,6 +76,7 @@ fun MagpieScreen(viewModel: MainViewModel) {
     val selecting by viewModel.selecting.collectAsState()
     val step by viewModel.step.collectAsState()
     val inFolders by viewModel.inFolders.collectAsState()
+    val suggestionSettings by viewModel.suggestionSettings.collectAsState()
 
     val context = LocalContext.current
     var showIgnored by rememberSaveable { mutableStateOf(false) }
@@ -80,6 +85,10 @@ fun MagpieScreen(viewModel: MainViewModel) {
     val folderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { chosen -> viewModel.onFolderChosen(chosen) }
+
+    val libraryPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { chosen -> if (chosen != null) viewModel.setLibrary(chosen) }
 
     val askForNotifications = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -96,7 +105,7 @@ fun MagpieScreen(viewModel: MainViewModel) {
         val token = choosing?.token
         if (token != null && token != launchedRequest) {
             launchedRequest = token
-            folderPicker.launch(viewModel.lastDestination)
+            folderPicker.launch(choosing?.openAt ?: viewModel.lastDestination)
         }
     }
 
@@ -136,6 +145,16 @@ fun MagpieScreen(viewModel: MainViewModel) {
                         }
                     },
                     onWatchingChange = viewModel::setWatching,
+                )
+            }
+
+            item {
+                SuggestionsCard(
+                    settings = suggestionSettings,
+                    onKeyChange = viewModel::setApiKey,
+                    onEnabledChange = viewModel::setSuggestionsEnabled,
+                    onPickLibrary = { libraryPicker.launch(suggestionSettings.library) },
+                    onClearLibrary = { viewModel.setLibrary(null) },
                 )
             }
 
@@ -254,6 +273,14 @@ fun MagpieScreen(viewModel: MainViewModel) {
     }
 
     when (val current = step) {
+        is FilingStep.Consulting -> WorkingDialog("Asking Claude about ${current.file.name}…")
+
+        is FilingStep.Suggested -> SuggestionDialog(
+            step = current,
+            onAccept = viewModel::acceptSuggestion,
+            onDecline = viewModel::declineSuggestion,
+        )
+
         is FilingStep.Rename -> RenameDialog(
             step = current,
             onConfirm = viewModel::confirmRename,
@@ -503,6 +530,105 @@ private fun SelectionBar(
     }
 }
 
+@Composable
+private fun SuggestionsCard(
+    settings: SuggestionSettings,
+    onKeyChange: (String) -> Unit,
+    onEnabledChange: (Boolean) -> Unit,
+    onPickLibrary: () -> Unit,
+    onClearLibrary: () -> Unit,
+) {
+    val context = LocalContext.current
+    var key by rememberSaveable { mutableStateOf(settings.apiKey) }
+    val libraryName = remember(settings.library) {
+        settings.library?.let { Destinations.label(context, it) }
+    }
+
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Ask Claude for a name", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        text = if (settings.usable) {
+                            "On. Magpie will suggest a name and a folder before you file."
+                        } else if (settings.enabled) {
+                            "Needs an API key below before it can ask anything."
+                        } else {
+                            "Off. Magpie files everything without touching the network."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Switch(checked = settings.enabled, onCheckedChange = onEnabledChange)
+            }
+
+            if (settings.enabled) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                Text(
+                    text = "This is the only part of Magpie that uses the internet. It sends " +
+                        "the filename, its size and type, the folder it landed in, and the " +
+                        "names of the folders in your library. It never sends the file.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                OutlinedTextField(
+                    value = key,
+                    onValueChange = {
+                        key = it
+                        onKeyChange(it)
+                    },
+                    singleLine = true,
+                    label = { Text("Anthropic API key") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    text = if (settings.apiKey.isBlank()) {
+                        "Get one from console.anthropic.com. It is kept on this phone only, " +
+                            "in Magpie's own private storage."
+                    } else {
+                        "Saved on this phone only. Calls are billed to your own Anthropic account."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                Text(
+                    text = if (libraryName == null) {
+                        "Pick the folder your filing lives under, and Claude can also suggest " +
+                            "which folder inside it a file belongs in. Without one, it only " +
+                            "suggests a name."
+                    } else {
+                        "Suggesting folders from inside \"$libraryName\"."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onPickLibrary) {
+                        Text(if (libraryName == null) "Choose library folder" else "Change")
+                    }
+                    if (libraryName != null) {
+                        TextButton(onClick = onClearLibrary) { Text("Clear") }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ---- dialogs ---------------------------------------------------------------
 
 @Composable
@@ -511,7 +637,7 @@ private fun RenameDialog(
     onConfirm: (String) -> Unit,
     onCancel: () -> Unit,
 ) {
-    var name by rememberSaveable(step.file.path) { mutableStateOf(step.file.name) }
+    var name by rememberSaveable(step.file.path) { mutableStateOf(step.initial) }
 
     // What the file will actually be called: characters no folder accepts are
     // stripped, and the extension is put back if the edit lost it. Showing it
@@ -647,6 +773,57 @@ private fun ReportDialog(outcomes: List<MoveOutcome>, onDismiss: () -> Unit) {
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+    )
+}
+
+@Composable
+private fun SuggestionDialog(
+    step: FilingStep.Suggested,
+    onAccept: () -> Unit,
+    onDecline: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDecline,
+        title = { Text("Claude suggests") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = step.file.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text("Name it", style = SectionLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                SelectionContainer {
+                    Text(step.suggestion.name, style = MaterialTheme.typography.bodyLarge)
+                }
+
+                Text("File it in", style = SectionLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    text = step.folderName
+                        ?: "No folder in your library fitted — the picker will open where you left it.",
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+
+                if (step.suggestion.reason.isNotBlank()) {
+                    Text(
+                        text = step.suggestion.reason,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text(
+                    text = "You still choose the folder yourself on the next screen, and you " +
+                        "can edit the name after that.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onAccept) { Text("Use this") } },
+        dismissButton = { TextButton(onClick = onDecline) { Text("Choose myself") } },
     )
 }
 
