@@ -2,8 +2,8 @@
 
 Android app that watches the folders downloads land in. When a file finishes
 arriving, Magpie posts a notification. Tapping it opens the system folder
-picker, offers to tidy the name, and moves the file there. Anything you do not
-deal with waits in a list inside the app.
+picker, offers to tidy the name, and copies the file there — the original is
+never deleted. Anything you do not deal with waits in a list inside the app.
 
 It exists because Android gives you no way to intercept a browser download and
 ask where to save it. Magpie catches the file a second after it lands instead.
@@ -16,8 +16,8 @@ unrelated and untouched.
 Two things, in this order. Neither is optional.
 
 **1. All-files access.** Open Magpie and tap *Grant all-files access*. Magpie
-cannot see what lands in Downloads without it, and cannot delete an original
-after copying it.
+cannot see what lands in Downloads without it: scoped storage will not show it
+files it did not create itself. It is never used to delete anything.
 
 **2. Stop ColorOS killing the watcher.** Settings → Battery → App battery usage
 → Magpie → **Allow background activity**, and turn **Optimise battery use**
@@ -42,6 +42,29 @@ within about fifteen seconds; eject it and it stops, without complaint.
 
 Bluetooth and app media folders (WhatsApp and so on) are deliberately **not**
 watched.
+
+## Sorting the memory card
+
+Watching and sorting are two different things, and the card gets both.
+
+**Watching** is narrow on purpose, because every watched folder means a
+notification each time something lands in it. On a card that stays the
+`Download` folder, as above.
+
+**Sorting** is you going looking, so it reaches across the whole card. The
+*Already in your folders* section lists what is on the card as well as in the
+watched folders, so anything already sitting there can be filed: the card's
+root, plus `Download`, `Downloads`, `DCIM`, `Pictures`, `Movies`, `Music`,
+`Documents`, `Books`, `Podcasts`, `Recordings` and `Bluetooth`. Folders that do
+not exist on your card are skipped in silence, so a card laid out any way works.
+
+Bluetooth appears here but is still never *watched* — files arriving over
+Bluetooth do not raise notifications, they are just reachable when you go
+looking. Every one of these paths goes through the same safety check as
+everything else, so a card is not a way around it.
+
+The list is capped at sixty entries, newest first. It is a way to reach a file,
+not a file manager.
 
 ## How it decides a file has finished arriving
 
@@ -73,23 +96,85 @@ If a lot of files turn up at once, all of them go on the waiting list but only
 the first five in each sweep get a notification. Coming back from a day of being
 killed should not bury your notification shade.
 
-## Moving a file
+## The fail-safe: Magpie never deletes anything
 
-Every move is **copy, verify, then delete**. There is no raw move anywhere in
-the code, and no path on which the original is deleted before the copy has been
-checked:
+**There is no delete call anywhere in this app.** Not for your original, not for
+a copy of its own that failed halfway, not for a folder, not for anything. This
+is not a setting and there is no switch for it — the capability is simply not in
+the code, and `MoveOutcome` has no "moved" case for a future change to reach
+for.
 
-1. The bytes are copied into a freshly created document in the chosen folder and
-   flushed to disk.
-2. Three things are checked: the number of bytes written matches the source, the
+What that means in practice:
+
+- **Filing means copying.** The original stays exactly where it was. After a
+  file is filed it comes off the waiting list, because you have dealt with it,
+  and the report tells you the full path where the original still sits so you
+  can remove it yourself once you are happy with the copy.
+- **Nothing is ever written over.** If something of that name is already in the
+  folder you chose, the copy goes into a `Duplicates` folder inside it instead —
+  see below.
+- **A failed copy is left where it fell.** If a check fails, the part-written
+  file stays in the destination and you are told its exact name and folder.
+  Removing it would be a delete, so Magpie will not do it for you.
+
+The cost of this is real and worth stating: **your Downloads folder does not
+empty itself.** Magpie tells you what it copied and where the original is, and
+clearing up is yours to do. That is the trade the fail-safe buys.
+
+### What is copied, and how it is checked
+
+1. Both ends are put through the safety check below — before a single byte is
+   read.
+2. The destination is listed to see whether that name is already taken.
+3. The bytes are copied into a freshly created document and flushed to disk.
+4. Three things are checked: the number of bytes written matches the source, the
    size the destination reports back matches the source, and the source has not
    changed size while the copy was running.
-3. Only then is the original deleted.
 
-If any check fails, the part-written copy is removed and the original is left
-exactly as it was — and you are told which check failed and why. If the copy is
-verified but the original cannot be deleted, you are told plainly that two
-copies now exist and where the other one is.
+Any check failing is reported with the reason, and nothing anywhere is removed.
+
+## Duplicates
+
+If the folder you pick already has a file with the name you are filing under,
+Magpie does not write over it and does not let the storage provider quietly
+rename yours to `thing (1).pdf`. It finds or creates a **`Duplicates` folder
+inside the destination** and puts the copy there.
+
+The report then tells you which it was:
+
+- **Same size as the one already there** — very likely the same file twice.
+- **Different size** — both sizes are given, so you can see they are not the
+  same file and decide which you want.
+
+An existing `Duplicates` folder is reused, never duplicated itself. If a name
+is taken inside `Duplicates` too, the provider disambiguates and the report
+names the file it actually created — still without anything being overwritten.
+
+## What Magpie will not touch
+
+The second half of the fail-safe. Every path, at both ends of every copy, goes
+through one check (`core/Safety.kt`) before anything is read or written. It is
+an **allowlist**: a path has to be inside a storage volume Android reports —
+your internal storage, or a mounted card — or it is refused. A route nobody
+thought of is refused by default rather than allowed by default.
+
+Refused outright:
+
+- **Anything that makes the phone work**: `/system`, `/vendor`, `/product`,
+  `/apex`, `/odm`, `/proc`, `/sys`, `/dev`, `/boot`, `/data`, and the rest of
+  the system partitions.
+- **Other apps' private storage**: `Android/data`, `Android/obb`,
+  `Android/media` on any volume.
+- **Android's own bookkeeping**: `LOST.DIR`, `.android_secure`.
+- **Paths that climb back out of themselves** with `..`.
+- **Anything outside a known volume at all.**
+
+When a copy is refused you are told so as a distinct outcome — the fail-safe
+speaking, not a fault — with the reason. The rules are plain string logic so
+they are unit tested without a device: see `SafetyTest.kt`, which covers the
+system partitions, other apps' folders, `..` traversal, and the case where
+`/storage/emulated/01` must not be mistaken for being inside
+`/storage/emulated/0`.
 
 ## Notifications
 
@@ -109,7 +194,7 @@ capitalisation evened out. The extension is always kept. Suggestions are built
 folder you are filing into. If a tidied name comes out identical to the
 original, it is not offered twice.
 
-Renaming is skipped for batch moves.
+Renaming is skipped for batch filing.
 
 ## No history, no undo
 
@@ -127,13 +212,22 @@ first install:
   the finished-arriving rule.
 - **Never run on a device or an emulator.** Nothing in this app has been
   executed on Android. Everything below the pure-Kotlin layer — the watcher, the
-  foreground service, the notifications, every move, and the whole UI — is
+  foreground service, the notifications, every copy, and the whole UI — is
   reviewed and reasoned about, not observed working.
 
 What that means in practice: the first thing to try is one small file, into a
 folder on internal storage, and check the copy arrived before trusting it with
 anything that matters. Then try one onto the SD card.
 
+- **The no-delete fail-safe is the one thing here that is structurally
+  guaranteed rather than merely tested.** It holds because there is no delete
+  call to go wrong: `grep -rn "delete" magpie/src/main` finds comments and
+  message text, and no call. The path rules that go with it are unit tested
+  (`SafetyTest.kt`, 15 cases) and those tests do run on CI.
+- **Duplicate handling has never been run.** Listing a folder before writing,
+  finding-or-creating `Duplicates`, and the size comparison are all new and
+  compile-checked only. The failure mode to watch for is a storage provider that
+  will not list children, which is refused rather than written into blindly.
 - **No request has ever been made to Anthropic from this code.** The suggestion
   path compiles, and the SDK call is built against the published API, but it has
   not been run once — not on a device, not on a desktop, not with a real key.
@@ -153,7 +247,7 @@ The specific things worth watching for, because they are the least certain:
 - **Which storage provider your file manager uses for the picker.** The
   same-folder check and the "do not re-offer our own copy" logic only understand
   Android's own storage provider. With anything else they quietly do nothing —
-  the move still works and is still verified.
+  the copy still works and is still verified.
 - **Whether `DocumentsContract.createDocument` keeps your extension** for a file
   type outside the built-in table. If a provider appends its own, the outcome
   message tells you the name it actually used.
@@ -172,7 +266,7 @@ The specific things worth watching for, because they are the least certain:
 - **Only the top level of each folder is watched**, not subfolders.
 - **Android may still group notifications** once several are showing. Magpie
   sets no group itself, but the system's own bundling is out of its hands.
-- **A move into the folder the file is already in** does nothing if the name is
+- **Filing into the folder the file is already in** does nothing if the name is
   unchanged, and behaves as a rename if the name is different.
 - If the destination provider does not report a size back, verification falls
   back to the byte count Magpie wrote, and the outcome says so.
@@ -180,8 +274,9 @@ The specific things worth watching for, because they are the least certain:
   drop an entry unless it can read the folder it lived in and see that the file
   has gone, because guessing the other way would empty your lists every time a
   card was unplugged.
-- **Already in your folders** lists the top level of each watched folder, newest
-  first, up to sixty entries. It is a way to reach a file, not a file manager.
+- **Already in your folders** lists the top level of each watched folder and of
+  the memory card, newest first, up to sixty entries. It is a way to reach a
+  file, not a file manager.
 
 ## Building
 
@@ -289,7 +384,7 @@ outright; it was reversed on request, to add this feature.
 
 | Permission | Why |
 | --- | --- |
-| `MANAGE_EXTERNAL_STORAGE` | Read the watched folders, and delete an original after a verified copy. Scoped storage can do neither for files Magpie did not create. |
+| `MANAGE_EXTERNAL_STORAGE` | Read the watched folders and the memory card. Scoped storage cannot read files Magpie did not create. Nothing is ever deleted with it. |
 | `POST_NOTIFICATIONS` | Offer each file as it lands. |
 | `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_DATA_SYNC` | Keep watching while the app is closed. |
 | `FOREGROUND_SERVICE_SPECIAL_USE` | From Android 15, a `dataSync` foreground service is capped at six hours a day, which would stop the watcher mid-day with no warning. `specialUse` has no cap. Both types are declared; `specialUse` is used from API 34 up. |

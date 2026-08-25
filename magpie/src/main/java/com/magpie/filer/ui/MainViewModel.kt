@@ -14,6 +14,7 @@ import com.magpie.filer.ai.LibraryListing
 import com.magpie.filer.ai.SuggestionResult
 import com.magpie.filer.ai.Suggester
 import com.magpie.filer.core.Naming
+import com.magpie.filer.core.Safety
 import com.magpie.filer.move.Destinations
 import com.magpie.filer.move.MoveOutcome
 import com.magpie.filer.move.Mover
@@ -256,7 +257,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun readInFolders(): List<SpottedFile> {
         val alreadyListed = (waiting.value + ignored.value).map { it.path }.toSet()
         val found = ArrayList<SpottedFile>()
-        for (root in WatchRoots.discover(app)) {
+        for (root in WatchRoots.sortable(app)) {
             val children = root.directory.listFiles()
             if (children == null) {
                 store.report(
@@ -504,30 +505,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun startMoves(files: List<SpottedFile>, tree: Uri, rename: String?) {
         scope.launch {
             _step.value = FilingStep.Working(
-                if (files.size == 1) "Moving ${files.first().name}…"
-                else "Moving ${files.size} files…"
+                if (files.size == 1) "Copying ${files.first().name}…"
+                else "Copying ${files.size} files…"
             )
 
             val folder = Destinations.folderPath(tree)
             val outcomes = ArrayList<MoveOutcome>(files.size)
             for (file in files) {
-                val outcome = mover.move(file, tree, rename ?: file.name)
+                val outcome = mover.copy(file, tree, rename ?: file.name)
 
                 // Filing into a folder Magpie watches would otherwise have it
                 // spot its own copy a moment later and offer it straight back.
-                val savedAs = when (outcome) {
-                    is MoveOutcome.Moved -> outcome.savedAs
-                    is MoveOutcome.OriginalRemains -> outcome.savedAs
+                // A duplicate lands one folder deeper, so that path is marked
+                // instead.
+                val landed = when (outcome) {
+                    is MoveOutcome.Copied ->
+                        folder?.let { File(it, outcome.savedAs) }
+
+                    is MoveOutcome.Duplicated ->
+                        folder?.let { File(File(it, Safety.DUPLICATES_FOLDER), outcome.savedAs) }
+
                     else -> null
                 }
-                if (folder != null && savedAs != null) {
-                    store.markOffered(File(folder, savedAs).absolutePath)
-                }
+                if (landed != null) store.markOffered(landed.absolutePath)
 
-                // Only a completed move takes a file off the list. If the copy
-                // worked but the original could not be deleted, the original is
-                // still sitting there and the user may still want to deal with it.
-                if (outcome is MoveOutcome.Moved) store.drop(file.path)
+                // A verified copy takes the file off the waiting list: the user
+                // has dealt with it. The original is still on the phone — Magpie
+                // never deletes — and the report says so in as many words, but
+                // it does not need offering again.
+                if (outcome is MoveOutcome.Copied || outcome is MoveOutcome.Duplicated) {
+                    store.drop(file.path)
+                }
                 if (outcome !is MoveOutcome.Failed) Notifications.cancel(app, file)
 
                 outcomes += outcome

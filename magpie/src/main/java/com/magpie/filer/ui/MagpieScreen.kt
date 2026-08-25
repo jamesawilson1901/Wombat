@@ -659,7 +659,7 @@ private fun RenameDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
-                    text = "Moving to ${step.destination}.",
+                    text = "Copying to ${step.destination}.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -716,7 +716,7 @@ private fun RenameDialog(
             TextButton(
                 onClick = { onConfirm(name) },
                 enabled = usable,
-            ) { Text("Move") }
+            ) { Text("Copy") }
         },
         dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
     )
@@ -745,15 +745,15 @@ private fun WorkingDialog(message: String, onSkip: (() -> Unit)? = null) {
 
 @Composable
 private fun ReportDialog(outcomes: List<MoveOutcome>, onDismiss: () -> Unit) {
-    // A copy that could not be followed by a delete still arrived, so counting
-    // it as "nothing moved" would contradict the line underneath it.
+    // A duplicate still arrived safely, so it counts as filed; the line
+    // underneath says where it actually went.
     val copied = outcomes.count {
-        it is MoveOutcome.Moved || it is MoveOutcome.OriginalRemains
+        it is MoveOutcome.Copied || it is MoveOutcome.Duplicated
     }
     val title = when {
-        copied == 0 -> if (outcomes.size == 1) "Not moved" else "Nothing moved"
+        copied == 0 -> if (outcomes.size == 1) "Not copied" else "Nothing copied"
         copied < outcomes.size -> "$copied of ${outcomes.size} filed"
-        outcomes.any { it is MoveOutcome.OriginalRemains } -> "Copied, originals still there"
+        outcomes.any { it is MoveOutcome.Duplicated } -> "Filed, duplicates kept apart"
         outcomes.size == 1 -> "Filed"
         else -> "All $copied filed"
     }
@@ -839,22 +839,45 @@ private fun SuggestionDialog(
 }
 
 private fun explain(outcome: MoveOutcome): String = when (outcome) {
-    is MoveOutcome.Moved -> buildString {
-        append("Moved to ${outcome.destination}")
+    is MoveOutcome.Copied -> buildString {
+        append("Copied to ${outcome.destination}")
         if (outcome.savedAs != outcome.fileName) append(", as \"${outcome.savedAs}\"")
-        append(". The copy was checked against the original before the original was deleted.")
+        append(", and checked against the original byte for byte. ")
+        append("The original is still at ${outcome.originalPath} — Magpie never deletes ")
+        append("anything, so remove it yourself when you are happy with the copy.")
         for (note in outcome.notes) {
             append(" ")
             append(note)
         }
     }
 
-    is MoveOutcome.OriginalRemains ->
-        "Copied to ${outcome.destination} as \"${outcome.savedAs}\" and checked, but the " +
-            "original at ${outcome.originalPath} could not be deleted (${outcome.reason}). " +
-            "Both copies are there — delete whichever you do not want."
+    is MoveOutcome.Duplicated -> buildString {
+        append("Something called \"${outcome.savedAs}\" was already in ${outcome.destination}, ")
+        append("so nothing was written over. The copy went to ${outcome.duplicatesFolder} ")
+        append("instead, and was checked byte for byte. ")
+        append(
+            if (outcome.looksIdentical) {
+                "It is the same size as the one already there, so it is very likely the " +
+                    "same file twice."
+            } else {
+                "The one already there is " +
+                    "${Formatting.fileSize(outcome.existingSize ?: 0L)} and this one is " +
+                    "${Formatting.fileSize(outcome.incomingSize)}, so they are not the " +
+                    "same file."
+            }
+        )
+        append(" The original is still at ${outcome.originalPath}.")
+        for (note in outcome.notes) {
+            append(" ")
+            append(note)
+        }
+    }
 
-    is MoveOutcome.Failed -> "Not moved. ${outcome.reason}"
+    is MoveOutcome.Refused ->
+        "Nothing was read or written. ${outcome.reason} Magpie only ever touches ordinary " +
+            "files on your own storage."
+
+    is MoveOutcome.Failed -> "Not copied. ${outcome.reason}"
 
     is MoveOutcome.Unchanged ->
         "It is already in ${outcome.destination} under that name, so nothing was changed."
