@@ -5,6 +5,11 @@ on:
     branches: [main, 'claude/**']
   workflow_dispatch:
 
+# The release step rewrites the magpie-latest prerelease with each green
+# build's APK, so there is always one obvious thing to install.
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -36,6 +41,19 @@ jobs:
         with:
           name: magpie-debug-apk
           path: magpie/build/outputs/apk/debug/*.apk
+
+      # Artifacts come wrapped in a zip and need a GitHub login; a release
+      # asset is a bare .apk at a stable link a phone can just download.
+      - name: Publish the APK as the magpie-latest release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: magpie-latest
+          name: Magpie (latest green build)
+          prerelease: true
+          body: |
+            Debug APK from ${{ github.sha }}. Rewritten on every green build.
+            Install steps and the ColorOS battery settings are in magpie/README.md.
+          files: magpie/build/outputs/apk/debug/*.apk
 
       - name: Upload test report
         if: failure()
