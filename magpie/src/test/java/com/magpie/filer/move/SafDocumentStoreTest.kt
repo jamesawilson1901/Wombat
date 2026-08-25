@@ -1,6 +1,8 @@
 package com.magpie.filer.move
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.ProviderInfo
 import android.net.Uri
 import android.provider.DocumentsContract
 import androidx.test.core.app.ApplicationProvider
@@ -49,10 +51,20 @@ class SafDocumentStoreTest {
         context = ApplicationProvider.getApplicationContext()
         root = temp.newFolder("destination")
         TestDocumentsProvider.reset(root)
-        Robolectric.setupContentProvider(
-            TestDocumentsProvider::class.java,
-            TestDocumentsProvider.AUTHORITY,
-        )
+
+        // DocumentsProvider.attachInfo refuses to start unless all four of
+        // these are set — it is exported, it grants URI permissions, and both
+        // sides are guarded by MANAGE_DOCUMENTS. That is the real framework
+        // check, not a Robolectric quirk, so the provider under test is set up
+        // exactly as Android would demand of a real one.
+        val info = ProviderInfo().apply {
+            authority = TestDocumentsProvider.AUTHORITY
+            exported = true
+            grantUriPermissions = true
+            readPermission = Manifest.permission.MANAGE_DOCUMENTS
+            writePermission = Manifest.permission.MANAGE_DOCUMENTS
+        }
+        Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(info)
         // A tree URI whose tree document id is "" — the root of the provider.
         treeUri = DocumentsContract.buildTreeDocumentUri(TestDocumentsProvider.AUTHORITY, "")
         store = SafDocumentStore(context, treeUri, "Papers")
