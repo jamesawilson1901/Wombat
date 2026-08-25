@@ -360,6 +360,65 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         consultJob = scope.launch { consult(file, settings.apiKey, settings.library) }
     }
 
+    /**
+     * Ask about everything on the waiting list in one request.
+     *
+     * Switching suggestions on with a backlog means a request per file
+     * otherwise. Answers are held and fill the name box as each file is
+     * filed, so the waiting is done once rather than every time you tap.
+     */
+    fun suggestForWaiting() {
+        val settings = store.suggestions.value
+        if (!settings.usable) {
+            store.report("Turn on Ask Claude for a name and save an API key first.")
+            return
+        }
+        val files = waiting.value.take(Suggester.BATCH_LIMIT)
+        if (files.isEmpty()) {
+            store.report("Nothing is waiting, so there is nothing to ask about.")
+            return
+        }
+        if (_step.value !is FilingStep.Idle) {
+            store.report("Magpie is busy filing. Finish that first.")
+            return
+        }
+
+        _step.value = FilingStep.Working("Asking Claude about ${files.size} files…")
+        scope.launch {
+            val folders = settings.library?.let { lib ->
+                when (val listing = withContext(Dispatchers.IO) { LibraryFolders.list(app, lib) }) {
+                    is LibraryListing.Folders -> listing.folders
+                    is LibraryListing.Failed -> {
+                        store.report(listing.reason)
+                        emptyList()
+                    }
+                }
+            }.orEmpty()
+
+            val answers = Suggester.suggestMany(files, folders.map { it.name }, settings.apiKey)
+            _batchSuggestions.value = answers
+            _step.value = FilingStep.Idle
+            store.report(
+                if (answers.isEmpty()) {
+                    "Claude had nothing to suggest for those, or the request did not get " +
+                        "through. Filing works as usual."
+                } else {
+                    "Suggestions ready for ${answers.size} of ${files.size}. Tap a file and " +
+                        "its suggested name is already in the box."
+                }
+            )
+        }
+    }
+
+    /** Answers from the last batch, used up as each file is filed. */
+    private val _batchSuggestions = MutableStateFlow<Map<String, Suggestion>>(emptyMap())
+
+    private fun takeBatchAnswer(file: SpottedFile): Suggestion? {
+        val answer = _batchSuggestions.value[file.path] ?: return null
+        _batchSuggestions.value = _batchSuggestions.value - file.path
+        return answer
+    }
+
     fun addRule(rule: Rule) = store.addRule(rule)
 
     fun removeRule(rule: Rule) = store.removeRule(rule)
